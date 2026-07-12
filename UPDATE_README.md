@@ -2898,3 +2898,23 @@ v4 远程导入只把过滤后的代码片段写入向量库，本地仅保存 `
 ```text
 33 passed in 2.34s
 ```
+
+## 40. 生产就绪里程碑 3：完整主链路端到端验收
+
+新增 `tests/test_end_to_end.py`，使用 FastAPI `TestClient`、真实 Chroma 持久化客户端和确定性的 hash embedding，覆盖一次完整用户旅程：
+
+1. `POST /repository/load` 导入远程文件集合；
+2. 建立安全分析快照和向量索引；
+3. `POST /chat` 返回带 `app/main.py` 来源的回答；
+4. `GET /repository/report/{repository_id}` 识别 FastAPI 和 `/health`；
+5. `POST /repository/generate-readme` 生成包含 FastAPI 证据的 README。
+
+CI 验收不访问真实 GitHub、不下载模型、不调用付费 LLM，避免把网络限流和外部服务波动误判为代码回归。真实 GitHub 联调仍作为发布前可选 smoke test。
+
+聚焦测试结果：
+
+```text
+1 passed, 14 warnings in 3.24s
+```
+
+14 条 warning 来自 Chroma 0.5.23 对 Pydantic 2.11+ 实例级 `model_fields` 的弃用访问；不影响本次业务断言，列入下一里程碑的依赖兼容治理。
