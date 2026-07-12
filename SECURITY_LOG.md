@@ -417,3 +417,28 @@ MAX_ARCHIVE_DOWNLOAD_BYTES=200000000
 - 限制 Pydantic 到 Chroma 0.5.23 已验证的兼容窗口。
 - FastAPI shutdown/lifespan 显式停止 Chroma System 并清理客户端缓存。
 - Windows 临时向量目录在客户端关闭后可成功删除，降低文件锁和残留数据风险。
+
+# SEC-019：单管理员登录、Session 与 CSRF
+
+状态：已完成。
+
+- 管理员密码只接受 scrypt 哈希配置，不保存明文。
+- Session 使用 HMAC-SHA256 签名并包含过期时间、CSRF token 和随机 nonce。
+- Cookie 设置 `HttpOnly` 和 `SameSite=Strict`；生产通过 `AUTH_COOKIE_SECURE=true` 开启 Secure。
+- 所有业务写请求在 Session 模式下要求 `X-CSRF-Token`。
+- 登录失败使用不记录原始 IP 的摘要键限流。
+- 无效签名、过期 Cookie、错误 CSRF 均拒绝访问。
+- `APP_API_KEY` 使用常量时间比较并保留自动化兼容。
+- 浏览器代码不再把 API Key 放入 `localStorage`。
+
+当前边界：这是单管理员认证，不提供多用户注册、仓库归属或租户隔离。
+
+# SEC-020：容器交付边界
+
+状态：配置和静态测试已完成。
+
+- Docker 镜像以非 root 用户运行。
+- 构建上下文排除 `.env`、运行数据、Git 元数据和日志。
+- 健康检查只访问公开 `/health`。
+- 仓库分析快照和 Chroma 数据通过独立 named volumes 持久化。
+- 当前机器没有 Docker，尚未进行本机镜像构建和容器运行验证。

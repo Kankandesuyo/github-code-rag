@@ -1,12 +1,12 @@
 # GitHub Code RAG
 
-最小可运行版 GitHub 单仓库代码 RAG 问答后端。
+可本地运行和容器部署的 GitHub 单仓库代码 RAG 问答应用。
 
 项目更新记录见：[UPDATE_README.md](./UPDATE_README.md)
 
 功能：
 
-- 输入 GitHub 仓库 URL 后通过 GitHub API 远程遍历项目文件树，不 clone、不下载仓库源码到本地
+- 输入 GitHub 仓库 URL 后通过 GitHub API 远程遍历项目文件树，不 clone、不下载完整 archive，仅保存经过安全过滤的文本分析快照
 - 读取常见代码和文档文件
 - 过滤依赖目录、构建产物、锁文件、二进制文件和 `.env`
 - 使用 LangChain 切分文本
@@ -18,6 +18,7 @@
 - 支持项目分析报告和 README 自动生成
 - 支持 Agent 执行日志、耗时和缓存命中状态返回
 - 使用 DeepSeek Chat API 基于检索片段回答问题
+- 支持可选的单管理员登录、签名 Session Cookie、CSRF 防护和 API Key 自动化访问
 
 ## 项目结构
 
@@ -147,6 +148,7 @@ GITHUB_TOKEN=
 - `GITHUB_TOKEN`：可选，只放在后端 `.env` 中，用于提高 GitHub API 限额；不要写进前端代码。
 - 当前导入路径优先读取 GitHub API；如果匿名 API 被 403 限流，会自动回退到 GitHub 网页目录浏览 + raw 文件读取。
 - 两种路径都只读取默认分支的远程文件树和单文件内容，不执行 `git clone`，也不下载 zip/tar archive。
+- 通过过滤的文本文件会写入 `repos/<repository_id>/source_snapshot/`，供项目报告和 README analyzer 使用；`.env`、私钥、凭证、二进制和超大文件不会进入快照。
 
 说明：
 
@@ -154,6 +156,42 @@ GITHUB_TOKEN=
 - `ENABLE_LOCAL_RERANK=true` 会对候选片段做本地二次排序，不额外调用模型。
 - `ENABLE_LLM_RERANK=true` 会在本地 rerank 后再调用一次 DeepSeek 对证据打分，质量可能更好，但延迟和调用成本更高。
 - `MAX_FINAL_CONTEXT_CHUNKS` 控制最终送入回答模型的片段数量，默认 10。
+
+## 管理员登录与安全配置
+
+本地个人开发可以保持以下三项为空，此时页面无需登录：
+
+```env
+ADMIN_USERNAME=
+ADMIN_PASSWORD_HASH=
+AUTH_SESSION_SECRET=
+```
+
+对局域网或公网提供服务前，建议启用单管理员登录。先在不会记录明文密码的交互提示中生成 scrypt 密码哈希：
+
+```powershell
+.\.venv\Scripts\python.exe -c "from getpass import getpass; from app.security.auth import hash_password; print(hash_password(getpass('Admin password: ')))"
+```
+
+生成 Session 签名密钥：
+
+```powershell
+.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+把两个命令的输出写入服务器 `.env`：
+
+```env
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD_HASH=粘贴生成的scrypt哈希
+AUTH_SESSION_SECRET=粘贴生成的随机密钥
+AUTH_SESSION_TTL_SECONDS=28800
+AUTH_COOKIE_SECURE=false
+LOGIN_RATE_LIMIT_WINDOW_SECONDS=300
+LOGIN_RATE_LIMIT_MAX_ATTEMPTS=5
+```
+
+生产 HTTPS 环境必须设置 `AUTH_COOKIE_SECURE=true` 和 `FORCE_HTTPS=true`。浏览器使用 `HttpOnly + SameSite=Strict` 签名 Cookie，写操作还需要 Session 中的 CSRF token。`APP_API_KEY` 可继续供脚本或自动化客户端通过 `X-API-Key` 使用。
 
 ## 启动
 
@@ -184,6 +222,25 @@ http://127.0.0.1:8000/
 ```text
 http://127.0.0.1:8200/
 ```
+
+## Docker 启动
+
+准备好 `.env` 后运行：
+
+```powershell
+docker compose up --build -d
+docker compose ps
+```
+
+访问 `http://127.0.0.1:8000/`。`repos` 和 `chroma_db` 使用 Docker named volumes 持久化；镜像内部以非 root 用户运行，并通过 `/health` 执行健康检查。
+
+停止服务：
+
+```powershell
+docker compose down
+```
+
+如需同时删除本地 Docker 数据卷，必须明确执行 `docker compose down -v`；该命令会删除已导入仓库的分析快照和向量索引。
 
 ## 测试
 

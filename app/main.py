@@ -8,12 +8,26 @@ from threading import Lock
 import time
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.agents.rag_agent import RAGAgent
 from app.config import get_settings
+from app.security.auth import (
+    SESSION_COOKIE_NAME,
+    AuthConfigurationError,
+    LoginRequest,
+    authorize_request,
+    check_login_rate_limit,
+    clear_login_attempts,
+    create_session_token,
+    decode_session_token,
+    ensure_auth_ready,
+    is_auth_enabled,
+    record_failed_login,
+    verify_password,
+)
 from app.schemas import (
     AgentLog,
     ChatRequest,
@@ -69,13 +83,12 @@ async def security_headers_and_https_redirect(request: Request, call_next):
     return response
 
 
-def require_api_key(x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None) -> None:
-    settings = get_settings()
-    expected_key = settings.app_api_key.strip()
-    if not expected_key:
-        return
-    if not x_api_key or not secrets.compare_digest(x_api_key, expected_key):
-        raise HTTPException(status_code=401, detail="invalid or missing API key")
+def require_api_key(
+    request: Request,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+    csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+) -> None:
+    authorize_request(request, x_api_key, csrf_token)
 
 
 def enforce_rate_limit(
@@ -118,6 +131,68 @@ def index() -> FileResponse:
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+@app.get("/auth/status")
+def auth_status(request: Request) -> dict:
+    if not is_auth_enabled():
+        return {"enabled": False, "authenticated": True, "username": None, "csrf_token": None}
+    try:
+        ensure_auth_ready()
+    except AuthConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    session = decode_session_token(request.cookies.get(SESSION_COOKIE_NAME, ""))
+    return {
+        "enabled": True,
+        "authenticated": session is not None,
+        "username": session.get("sub") if session else None,
+        "csrf_token": session.get("csrf") if session else None,
+    }
+
+
+@app.post("/auth/login")
+def auth_login(request: Request, credentials: LoginRequest) -> JSONResponse:
+    if not is_auth_enabled():
+        raise HTTPException(status_code=404, detail="administrator authentication is not enabled")
+    try:
+        ensure_auth_ready()
+    except AuthConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    check_login_rate_limit(request)
+    settings = get_settings()
+    username_valid = secrets.compare_digest(credentials.username, settings.admin_username)
+    password_valid = verify_password(credentials.password, settings.admin_password_hash)
+    if not username_valid or not password_valid:
+        record_failed_login(request)
+        raise HTTPException(status_code=401, detail="invalid username or password")
+
+    clear_login_attempts(request)
+    token, csrf_token = create_session_token(settings.admin_username)
+    response = JSONResponse(
+        {"enabled": True, "authenticated": True, "username": settings.admin_username, "csrf_token": csrf_token}
+    )
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        max_age=settings.auth_session_ttl_seconds,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+
+@app.post("/auth/logout")
+def auth_logout(
+    request: Request,
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+    csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+) -> Response:
+    authorize_request(request, x_api_key, csrf_token)
+    response = JSONResponse({"authenticated": False})
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/", samesite="strict")
+    return response
 
 
 @app.get("/repositories", dependencies=[Depends(require_api_key), Depends(enforce_rate_limit)])

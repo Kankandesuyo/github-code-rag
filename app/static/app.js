@@ -18,17 +18,93 @@ const artifactMeta = document.querySelector("#artifactMeta");
 const artifactBody = document.querySelector("#artifactBody");
 const artifactLogs = document.querySelector("#artifactLogs");
 const closeArtifactButton = document.querySelector("#closeArtifactButton");
+const loginOverlay = document.querySelector("#loginOverlay");
+const loginForm = document.querySelector("#loginForm");
+const loginUsername = document.querySelector("#loginUsername");
+const loginPassword = document.querySelector("#loginPassword");
+const loginButton = document.querySelector("#loginButton");
+const loginStatus = document.querySelector("#loginStatus");
+const logoutButton = document.querySelector("#logoutButton");
+let csrfToken = "";
+let authEnabled = false;
 
 const welcomeMessage =
   "先在左侧导入 GitHub 仓库，然后像聊天一样直接提问。我会基于检索到的代码片段回答，并列出来源文件。";
 
-function getApiHeaders(extraHeaders = {}) {
+function getApiHeaders(extraHeaders = {}, includeCsrf = false) {
   const headers = { ...extraHeaders };
-  const apiKey = window.localStorage.getItem("githubCodeRagApiKey");
-  if (apiKey) {
-    headers["X-API-Key"] = apiKey;
+  if (includeCsrf && csrfToken) {
+    headers["X-CSRF-Token"] = csrfToken;
   }
   return headers;
+}
+
+function showLogin(message = "") {
+  loginStatus.textContent = message;
+  loginOverlay.classList.remove("is-hidden");
+  logoutButton.classList.add("is-hidden");
+  loginPassword.value = "";
+  loginUsername.focus();
+}
+
+function hideLogin() {
+  loginOverlay.classList.add("is-hidden");
+  logoutButton.classList.toggle("is-hidden", !authEnabled);
+}
+
+async function initializeAuth() {
+  const response = await fetch("/auth/status");
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "读取登录状态失败");
+  }
+  authEnabled = data.enabled === true;
+  csrfToken = data.csrf_token || "";
+  if (authEnabled && !data.authenticated) {
+    showLogin();
+    return;
+  }
+  hideLogin();
+  await refreshRepositories();
+}
+
+async function login(event) {
+  event.preventDefault();
+  loginButton.disabled = true;
+  loginStatus.textContent = "正在验证...";
+  try {
+    const response = await fetch("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: loginUsername.value.trim(), password: loginPassword.value }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.detail || "登录失败");
+    }
+    authEnabled = true;
+    csrfToken = data.csrf_token || "";
+    hideLogin();
+    await refreshRepositories();
+  } catch (error) {
+    showLogin(error.message);
+  } finally {
+    loginButton.disabled = false;
+  }
+}
+
+async function logout() {
+  const response = await fetch("/auth/logout", {
+    method: "POST",
+    headers: getApiHeaders({}, true),
+  });
+  if (!response.ok) {
+    const data = await response.json();
+    throw new Error(data.detail || "退出失败");
+  }
+  csrfToken = "";
+  resetMessages();
+  showLogin("已安全退出。" );
 }
 
 function getActiveRepositoryId() {
@@ -294,7 +370,7 @@ async function loadRepository() {
   try {
     const response = await fetch("/repository/load", {
       method: "POST",
-      headers: getApiHeaders({ "Content-Type": "application/json" }),
+      headers: getApiHeaders({ "Content-Type": "application/json" }, true),
       body: JSON.stringify({ github_url: githubUrl }),
     });
     const data = await response.json();
@@ -337,7 +413,7 @@ async function sendQuestion(event) {
   try {
     const response = await fetch("/chat", {
       method: "POST",
-      headers: getApiHeaders({ "Content-Type": "application/json" }),
+      headers: getApiHeaders({ "Content-Type": "application/json" }, true),
       body: JSON.stringify({ repository_id: repositoryId, question }),
     });
     const data = await response.json();
@@ -400,7 +476,7 @@ async function generateReadme() {
   try {
     const response = await fetch("/repository/generate-readme", {
       method: "POST",
-      headers: getApiHeaders({ "Content-Type": "application/json" }),
+      headers: getApiHeaders({ "Content-Type": "application/json" }, true),
       body: JSON.stringify({ repository_id: repositoryId }),
     });
     const data = await response.json();
@@ -443,6 +519,8 @@ clearChatButton.addEventListener("click", resetMessages);
 reportButton.addEventListener("click", generateProjectReport);
 readmeButton.addEventListener("click", generateReadme);
 closeArtifactButton.addEventListener("click", closeArtifact);
+loginForm.addEventListener("submit", login);
+logoutButton.addEventListener("click", () => logout().catch((error) => appendMessage("assistant", `出错了：${error.message}`)));
 quickPromptButtons.forEach((button) => {
   button.addEventListener("click", () => {
     if (button.dataset.action === "report") {
@@ -461,4 +539,4 @@ quickPromptButtons.forEach((button) => {
 });
 
 resetMessages();
-refreshRepositories().catch((error) => setStatus(error.message, true));
+initializeAuth().catch((error) => showLogin(error.message));

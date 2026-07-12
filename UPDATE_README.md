@@ -2947,3 +2947,49 @@ temporary_directory_cleanup=ok
 修复后不再出现 PostHog telemetry 参数错误，临时目录可以正常删除。
 
 当前机器实际解释器为 Python 3.13，而项目声明支持 Python 3.12；Pydantic 2.10.6 的 v1 兼容层在 Python 3.13 下仍报告 16 条 `ForwardRef._evaluate` 弃用提示。该提示不涉及 telemetry、业务失败或资源泄漏，完整测试仍为 `36 passed`。Docker 与 CI 固定使用 Python 3.12，以项目声明的运行版本作为交付基线。
+
+## 42. 生产就绪里程碑 5A：单管理员 Session 认证
+
+实现可选的单管理员认证，适合本项目当前“单人维护、不是多租户 SaaS”的产品边界。
+
+主要能力：
+
+- scrypt 密码哈希，明文密码不写入配置、代码或日志；哈希使用适合 `.env`/Compose 的冒号格式，不包含 `$` 插值字符。
+- HMAC-SHA256 签名、带过期时间和随机 nonce 的 Session Cookie。
+- Cookie 使用 `HttpOnly`、`SameSite=Strict`，生产可通过 `AUTH_COOKIE_SECURE=true` 开启 Secure。
+- Session 写请求强制校验 `X-CSRF-Token`。
+- 登录失败按客户端 IP 摘要进行滑动窗口限流。
+- Cookie 篡改和过期后拒绝访问。
+- 原 `APP_API_KEY` 保留，自动化客户端不受浏览器 Session 影响。
+- 未配置管理员账号时保持本地开发免登录兼容。
+- 前端新增登录遮罩和退出按钮，不再从 `localStorage` 读取或保存 API Key。
+
+新增接口：
+
+- `GET /auth/status`
+- `POST /auth/login`
+- `POST /auth/logout`
+
+认证与前端测试：`9 passed`；与交付文件测试合并运行：`13 passed`。
+
+## 43. 生产就绪里程碑 5B：Docker 与 GitHub Actions CI
+
+新增：
+
+- `Dockerfile`：Python 3.12 slim、非 root `appuser`、Uvicorn、`/health` 健康检查。
+- `.dockerignore`：排除 `.env`、Git、虚拟环境、运行仓库、向量库、日志和测试产物。
+- `compose.yaml`：映射 8000 端口，使用 `repos` 和 `chroma_db` named volumes。
+- `.github/workflows/ci.yml`：Python 3.12 下安装依赖、compileall、pip check、pytest。
+- `tests/test_delivery_files.py`：静态验证非 root、健康检查、敏感上下文排除、持久化卷和 CI 命令。
+
+当前机器未安装 Docker，因此本轮已完成静态交付测试（`4 passed`），无法在本机声称镜像构建或容器健康检查已经实际通过。CI 会在推送到 GitHub 后执行 Python 3.12 验收。
+
+里程碑 5 完成后的本地全量验证：
+
+```text
+compileall: PASS
+No broken requirements found.
+49 passed, 16 warnings in 4.17s
+```
+
+JavaScript 通过 `node --check app/static/app.js`。16 条 warning 是前述 Python 3.13 与 Pydantic v1 兼容层提示；项目 Docker/CI 基线为 Python 3.12。

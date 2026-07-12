@@ -9,6 +9,13 @@ class Settings(BaseSettings):
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
     app_api_key: str = ""
+    admin_username: str = ""
+    admin_password_hash: str = ""
+    auth_session_secret: str = ""
+    auth_session_ttl_seconds: int = 28_800
+    auth_cookie_secure: bool = False
+    login_rate_limit_window_seconds: int = 300
+    login_rate_limit_max_attempts: int = 5
 
     repos_dir: Path = Path("repos")
     chroma_dir: Path = Path("chroma_db")

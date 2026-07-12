@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EMBEDDING_PROVIDER: hash
+      DEEPSEEK_API_KEY: ""
+      CHROMA_ANONYMIZED_TELEMETRY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Compile Python sources
+        run: python -m compileall -q app tests
+      - name: Validate dependencies
+        run: python -m pip check
+      - name: Run tests
+        run: python -m pytest tests -q

@@ -1,0 +1,19 @@
+services:
+  github-code-rag:
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      REPOS_DIR: /app/repos
+      CHROMA_DIR: /app/chroma_db
+    volumes:
+      - repos:/app/repos
+      - chroma_db:/app/chroma_db
+    restart: unless-stopped
+
+volumes:
+  repos:
+  chroma_db:

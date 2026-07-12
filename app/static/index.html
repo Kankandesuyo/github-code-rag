@@ -9,6 +9,21 @@
   </head>
   <body>
     <div class="liquid-backdrop" aria-hidden="true"></div>
+    <section id="loginOverlay" class="login-overlay is-hidden" aria-labelledby="loginTitle">
+      <form id="loginForm" class="login-card">
+        <div class="brand-mark">GR</div>
+        <div>
+          <h1 id="loginTitle">管理员登录</h1>
+          <p>登录后才能访问仓库分析和代码问答。</p>
+        </div>
+        <label for="loginUsername">用户名</label>
+        <input id="loginUsername" name="username" autocomplete="username" required />
+        <label for="loginPassword">密码</label>
+        <input id="loginPassword" name="password" type="password" autocomplete="current-password" required />
+        <button id="loginButton" type="submit">登录</button>
+        <p id="loginStatus" class="status-text" aria-live="polite"></p>
+      </form>
+    </section>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
@@ -61,6 +76,7 @@
             <p id="activeRepoText">请选择或导入一个仓库</p>
           </div>
           <div class="header-actions">
+            <button id="logoutButton" class="ghost-button is-hidden" type="button">退出登录</button>
             <button id="clearChatButton" class="ghost-button" type="button">清空对话</button>
             <a href="/docs" target="_blank" rel="noreferrer">API Docs</a>
           </div>
