@@ -2918,3 +2918,32 @@ CI 验收不访问真实 GitHub、不下载模型、不调用付费 LLM，避免
 ```
 
 14 条 warning 来自 Chroma 0.5.23 对 Pydantic 2.11+ 实例级 `model_fields` 的弃用访问；不影响本次业务断言，列入下一里程碑的依赖兼容治理。
+
+## 41. 生产就绪里程碑 4：Chroma telemetry 与资源生命周期
+
+### 根因
+
+- ChromaDB 0.5.23 使用旧版 `posthog.capture(distinct_id, event, properties)` 调用方式，但未限制 PostHog 上界；本地被解析到 PostHog 7.19.1 后接口变成 `capture(event, **kwargs)`，因此即使关闭匿名 telemetry 仍会打印参数错误。
+- `get_chroma_client()` 使用 `lru_cache` 长期持有 `PersistentClient`，应用退出和测试结束时没有停止 Chroma `System`，Windows 会继续占用向量文件。
+- ChromaDB 0.5.23 在 Pydantic 2.11+ 下会产生 `model_fields` 弃用警告。
+
+### 修复
+
+- 依赖约束增加 `posthog>=2.4.0,<6.0.0`，当前验证版本为 5.4.0。
+- 依赖约束增加 `pydantic>=2.7.0,<2.11.0`，保持与 FastAPI、pydantic-settings 和 Chroma 0.5.23 的兼容窗口。
+- 新增 `close_chroma_client()`：停止内部 Chroma System、清理共享 System cache，并清空 Python 客户端缓存。
+- FastAPI 使用 lifespan 在服务关闭阶段统一释放 Chroma。
+- 新增测试确认客户端停止后会重新创建，并确认 `TestClient` 退出时调用释放函数。
+
+### 验证
+
+真实临时向量库写入并释放结果：
+
+```text
+{'chunks_written': 1, 'client_cache_size': 0}
+temporary_directory_cleanup=ok
+```
+
+修复后不再出现 PostHog telemetry 参数错误，临时目录可以正常删除。
+
+当前机器实际解释器为 Python 3.13，而项目声明支持 Python 3.12；Pydantic 2.10.6 的 v1 兼容层在 Python 3.13 下仍报告 16 条 `ForwardRef._evaluate` 弃用提示。该提示不涉及 telemetry、业务失败或资源泄漏，完整测试仍为 `36 passed`。Docker 与 CI 固定使用 Python 3.12，以项目声明的运行版本作为交付基线。

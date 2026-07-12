@@ -1,5 +1,6 @@
 from pathlib import Path
 from collections import deque
+from contextlib import asynccontextmanager
 import hashlib
 import re
 import secrets
@@ -30,6 +31,7 @@ from app.services.report_service import ReportService
 from app.services.repo_loader import RepositoryLoadError, load_repository
 from app.services.vector_store import (
     VectorStoreError,
+    close_chroma_client,
     detect_query_intents,
     expand_query_keywords,
     index_chunks_incremental,
@@ -37,7 +39,13 @@ from app.services.vector_store import (
 )
 
 
-app = FastAPI(title="GitHub Code RAG", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    yield
+    close_chroma_client()
+
+
+app = FastAPI(title="GitHub Code RAG", version="0.1.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
 rag_agent = RAGAgent()
 report_service = ReportService()

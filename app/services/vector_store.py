@@ -44,6 +44,21 @@ def get_chroma_client() -> chromadb.PersistentClient:
     )
 
 
+def close_chroma_client() -> None:
+    if get_chroma_client.cache_info().currsize == 0:
+        return
+    client = get_chroma_client()
+    try:
+        system = getattr(client, "_system", None)
+        if system is not None:
+            system.stop()
+        clear_system_cache = getattr(client, "clear_system_cache", None)
+        if callable(clear_system_cache):
+            clear_system_cache()
+    finally:
+        get_chroma_client.cache_clear()
+
+
 def build_chroma_settings() -> ChromaSettings:
     settings = get_settings()
     return ChromaSettings(anonymized_telemetry=settings.chroma_anonymized_telemetry)

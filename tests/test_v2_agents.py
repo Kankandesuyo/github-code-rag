@@ -8,6 +8,7 @@ from app.config import get_settings
 from app.main import _rate_limit_buckets, app
 from app.services.file_parser import DocumentChunk, ParsedFile, read_repository_files
 from app.services import repo_loader
+from app.services import vector_store
 from app.services.llm_service import build_context, build_no_key_fallback_answer, redact_sensitive_text
 from app.services.repo_loader import RepositoryLoadError, browse_github_repository, load_repository, validate_github_repo_url
 from app.services.report_service import ReportService
@@ -599,6 +600,49 @@ def test_chroma_telemetry_is_disabled_by_default(monkeypatch):
     chroma_settings = build_chroma_settings()
 
     assert chroma_settings.anonymized_telemetry is False
+
+
+def test_close_chroma_client_stops_system_and_clears_cache(monkeypatch, tmp_path):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "chroma_dir", tmp_path / "chroma")
+
+    class FakeSystem:
+        def __init__(self):
+            self.stopped = False
+
+        def stop(self):
+            self.stopped = True
+
+    class FakeClient:
+        def __init__(self):
+            self._system = FakeSystem()
+
+    clients = []
+
+    def fake_persistent_client(**_kwargs):
+        client = FakeClient()
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(vector_store.chromadb, "PersistentClient", fake_persistent_client)
+    vector_store.get_chroma_client.cache_clear()
+    first = vector_store.get_chroma_client()
+
+    vector_store.close_chroma_client()
+    second = vector_store.get_chroma_client()
+
+    assert first._system.stopped is True
+    assert second is not first
+
+
+def test_application_shutdown_closes_chroma_client(monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.main.close_chroma_client", lambda: calls.append("closed"))
+
+    with TestClient(app):
+        pass
+
+    assert calls == ["closed"]
 
 
 def test_security_headers_are_set(monkeypatch):

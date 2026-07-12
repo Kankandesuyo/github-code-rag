@@ -408,3 +408,12 @@ MAX_ARCHIVE_DOWNLOAD_BYTES=200000000
 - 自动测试确认 `.env` 和路径穿越文件不会落盘。
 
 验证结果：完整测试 `33 passed`。
+
+# SEC-018：Chroma 依赖与退出生命周期
+
+状态：已完成。
+
+- 限制 PostHog 版本上界，避免 Chroma 0.5.23 调用不兼容 telemetry API。
+- 限制 Pydantic 到 Chroma 0.5.23 已验证的兼容窗口。
+- FastAPI shutdown/lifespan 显式停止 Chroma System 并清理客户端缓存。
+- Windows 临时向量目录在客户端关闭后可成功删除，降低文件锁和残留数据风险。
