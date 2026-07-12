@@ -2993,3 +2993,39 @@ No broken requirements found.
 ```
 
 JavaScript 通过 `node --check app/static/app.js`。16 条 warning 是前述 Python 3.13 与 Pydantic v1 兼容层提示；项目 Docker/CI 基线为 Python 3.12。
+
+## 44. 生产就绪五项任务最终验收
+
+完成日期：2026-07-12。
+
+本轮逐一完成：
+
+1. 远程文件安全分析快照，打通 RAG、项目报告和 README；
+2. 将完整应用、前端、Agent、analyzer、测试、文档和交付资产纳入 Git；
+3. 增加导入、索引、问答、报告、README 完整端到端测试；
+4. 修复 Chroma/PostHog telemetry 兼容和 Windows 文件句柄释放；
+5. 增加 Docker、GitHub Actions CI、单管理员 Session 登录和前端登录页面。
+
+最终全量命令结果：
+
+```text
+python -m compileall -q app tests -> PASS
+python -m pip check -> No broken requirements found.
+python -m pytest tests -q -> 49 passed, 16 warnings in 4.15s
+node --check app/static/app.js -> PASS
+```
+
+真实 Uvicorn 服务验收（临时测试账号和临时 Session 密钥，仅存在于测试进程环境）：
+
+```text
+GET /health -> 200, status=ok
+GET /auth/status -> enabled=true
+GET /repositories before login -> 401
+POST /auth/login -> authenticated=true
+GET /repositories after login -> 200
+POST /auth/logout with CSRF -> authenticated=false
+GET / -> 200
+service shutdown -> port closed
+```
+
+未验证边界：当前机器没有 Docker 命令，因此没有执行 `docker build` 或容器运行测试；相关文件已由 4 个静态交付测试覆盖，并将在 GitHub Actions 的 Python 3.12 环境继续验证代码测试。
