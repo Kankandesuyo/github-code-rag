@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GitHub Code RAG</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="liquid-backdrop" aria-hidden="true"></div>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">GR</div>
+          <div>
+            <h1>GitHub Code RAG</h1>
+            <p>单仓库代码问答</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <label for="githubUrl">GitHub 仓库 URL</label>
+          <div class="repo-form">
+            <input
+              id="githubUrl"
+              type="url"
+              placeholder="https://github.com/tiangolo/fastapi"
+              autocomplete="off"
+            />
+            <button id="loadRepoButton" type="button">导入</button>
+          </div>
+          <p id="loadStatus" class="status-text"></p>
+        </section>
+
+        <section class="panel">
+          <label for="repositorySelect">已导入仓库</label>
+          <select id="repositorySelect"></select>
+          <button id="refreshReposButton" class="secondary-button" type="button">刷新列表</button>
+        </section>
+
+        <section class="panel">
+          <label>V2 Codebase Agent</label>
+          <div class="agent-actions">
+            <button id="reportButton" class="secondary-button" type="button">项目报告</button>
+            <button id="readmeButton" class="secondary-button" type="button">生成 README</button>
+          </div>
+          <p class="status-text">报告和 README 会展示 Agent 执行日志。</p>
+        </section>
+
+        <div class="sidebar-foot">
+          <span class="dot"></span>
+          <span>Live API · 127.0.0.1:8200</span>
+        </div>
+      </aside>
+
+      <main class="chat-area">
+        <header class="chat-header">
+          <div>
+            <h2>代码仓库对话</h2>
+            <p id="activeRepoText">请选择或导入一个仓库</p>
+          </div>
+          <div class="header-actions">
+            <button id="clearChatButton" class="ghost-button" type="button">清空对话</button>
+            <a href="/docs" target="_blank" rel="noreferrer">API Docs</a>
+          </div>
+        </header>
+
+        <section class="conversation">
+          <div class="conversation-meta">
+            <span>GitHub Code RAG Assistant</span>
+            <span>基于当前仓库代码片段回答</span>
+          </div>
+
+          <div id="messages" class="messages"></div>
+
+          <aside id="artifactPanel" class="artifact-panel is-hidden" aria-live="polite">
+            <div class="artifact-header">
+              <div>
+                <h3 id="artifactTitle">项目文档</h3>
+                <p id="artifactMeta">等待生成</p>
+              </div>
+              <button id="closeArtifactButton" class="ghost-button" type="button">关闭</button>
+            </div>
+            <div id="artifactBody" class="artifact-body"></div>
+            <div id="artifactLogs" class="artifact-log-shell"></div>
+          </aside>
+
+          <div class="quick-prompts" aria-label="示例问题">
+            <button type="button" data-question="这个项目怎么启动？">怎么启动？</button>
+            <button type="button" data-question="请解释这个项目的主要目录结构。">目录结构</button>
+            <button type="button" data-question="这个项目的核心入口文件在哪里？">入口文件</button>
+            <button type="button" data-action="report">项目报告</button>
+            <button type="button" data-action="readme">生成 README</button>
+          </div>
+        </section>
+
+        <form id="chatForm" class="composer">
+          <div class="composer-box">
+            <textarea
+              id="questionInput"
+              rows="1"
+              placeholder="输入消息，按 Enter 发送，Shift + Enter 换行"
+            ></textarea>
+            <button id="sendButton" type="submit" aria-label="发送消息">发送</button>
+          </div>
+        </form>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
