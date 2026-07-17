@@ -93,6 +93,30 @@ def recreate_collection(repository_id: str) -> Collection:
     )
 
 
+def delete_repository_collections(repository_id: str) -> int:
+    """Delete only Chroma collections explicitly owned by a repository."""
+    client = get_chroma_client()
+    deleted = 0
+    try:
+        collections = client.list_collections()
+    except Exception as exc:
+        raise VectorStoreError("failed to enumerate repository vector collections") from exc
+
+    for collection in collections:
+        metadata = getattr(collection, "metadata", None) or {}
+        if metadata.get("repository_id") != repository_id:
+            continue
+        name = getattr(collection, "name", "")
+        if not name:
+            continue
+        try:
+            client.delete_collection(name=name)
+        except Exception as exc:
+            raise VectorStoreError("failed to delete repository vector collection") from exc
+        deleted += 1
+    return deleted
+
+
 def make_chunk_id(repository_id: str, chunk: DocumentChunk) -> str:
     return f"{repository_id}:{chunk.metadata['file_path']}:{chunk.metadata['chunk_index']}"
 

@@ -6,6 +6,7 @@ import secrets
 import time
 from collections import defaultdict, deque
 from threading import Lock
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, Field
@@ -16,7 +17,9 @@ from app.config import get_settings
 SESSION_COOKIE_NAME = "github_code_rag_session"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _login_attempts: dict[str, deque[float]] = defaultdict(deque)
+_login_in_flight: dict[str, dict[str, float]] = defaultdict(dict)
 _login_attempts_lock = Lock()
+_LOGIN_RESERVATION_STATE_KEY = "login_rate_limit_reservation"
 
 
 class AuthConfigurationError(RuntimeError):
@@ -80,6 +83,70 @@ def ensure_auth_ready() -> None:
         raise AuthConfigurationError("ADMIN_USERNAME and ADMIN_PASSWORD_HASH must both be configured")
     if len(settings.auth_session_secret.strip()) < 32:
         raise AuthConfigurationError("AUTH_SESSION_SECRET must contain at least 32 characters")
+
+
+def ensure_deployment_security() -> None:
+    settings = get_settings()
+    deployment_mode = settings.deployment_mode.strip().lower()
+    if deployment_mode not in {"local", "development", "production"}:
+        raise AuthConfigurationError(
+            "DEPLOYMENT_MODE must be one of: local, development, production"
+        )
+    if deployment_mode != "production":
+        return
+
+    public_base_url = settings.public_base_url.strip()
+    try:
+        parsed_base_url = urlsplit(public_base_url)
+        parsed_base_url.port
+    except ValueError as exc:
+        raise AuthConfigurationError("PUBLIC_BASE_URL must be a valid HTTPS URL") from exc
+    if (
+        parsed_base_url.scheme.lower() != "https"
+        or not parsed_base_url.hostname
+        or parsed_base_url.username is not None
+        or parsed_base_url.password is not None
+        or parsed_base_url.query
+        or parsed_base_url.fragment
+        or any(character.isspace() for character in public_base_url)
+    ):
+        raise AuthConfigurationError(
+            "PUBLIC_BASE_URL must be an HTTPS URL without credentials, query, or fragment"
+        )
+
+    if any(host.strip() == "*" for host in settings.allowed_hosts):
+        raise AuthConfigurationError("ALLOWED_HOSTS must not contain '*' in production")
+    if not settings.force_https and not settings.tls_terminated_by_proxy:
+        raise AuthConfigurationError(
+            "Production requires FORCE_HTTPS=true or TLS_TERMINATED_BY_PROXY=true"
+        )
+
+    app_api_key = settings.app_api_key.strip()
+    if app_api_key and len(app_api_key) < 32:
+        raise AuthConfigurationError(
+            "APP_API_KEY must contain at least 32 characters in production"
+        )
+
+    admin_username = settings.admin_username.strip()
+    admin_password_hash = settings.admin_password_hash.strip()
+    auth_session_secret = settings.auth_session_secret.strip()
+    admin_values = (admin_username, admin_password_hash, auth_session_secret)
+    if any(admin_values):
+        if not all(admin_values):
+            raise AuthConfigurationError(
+                "ADMIN_USERNAME, ADMIN_PASSWORD_HASH, and AUTH_SESSION_SECRET must all be configured"
+            )
+        ensure_auth_ready()
+        if not settings.auth_cookie_secure:
+            raise AuthConfigurationError(
+                "AUTH_COOKIE_SECURE must be true when administrator sessions are enabled in production"
+            )
+        return
+
+    if not app_api_key:
+        raise AuthConfigurationError(
+            "Production deployment requires authentication via administrator credentials or APP_API_KEY"
+        )
 
 
 def create_session_token(username: str, *, now: int | None = None, ttl_seconds: int | None = None) -> tuple[str, str]:
@@ -168,21 +235,73 @@ def check_login_rate_limit(request: Request) -> None:
     cutoff = now - window
     key = login_bucket_key(request)
     with _login_attempts_lock:
-        attempts = _login_attempts[key]
-        while attempts and attempts[0] < cutoff:
-            attempts.popleft()
-        if len(attempts) >= limit:
+        _prune_login_attempts(cutoff)
+        known_keys = set(_login_attempts) | set(_login_in_flight)
+        if key not in known_keys and len(known_keys) >= settings.login_rate_limit_max_buckets:
+            raise HTTPException(status_code=429, detail="login rate limit capacity reached")
+        failures = _login_attempts.get(key)
+        in_flight = _login_in_flight.get(key)
+        if len(failures or ()) + len(in_flight or ()) >= limit:
             raise HTTPException(status_code=429, detail="too many login attempts")
+        reservation = secrets.token_urlsafe(18)
+        _login_in_flight.setdefault(key, {})[reservation] = now
+        setattr(request.state, _LOGIN_RESERVATION_STATE_KEY, (key, reservation))
 
 
 def record_failed_login(request: Request) -> None:
+    settings = get_settings()
+    now = time.monotonic()
     with _login_attempts_lock:
-        _login_attempts[login_bucket_key(request)].append(time.monotonic())
+        _prune_login_attempts(now - settings.login_rate_limit_window_seconds)
+        key = login_bucket_key(request)
+        reservation_data = getattr(request.state, _LOGIN_RESERVATION_STATE_KEY, None)
+        if reservation_data is not None:
+            reserved_key, reservation = reservation_data
+            reservations = _login_in_flight.get(reserved_key)
+            if reservations is not None and reservation in reservations:
+                reservations.pop(reservation, None)
+                if not reservations:
+                    _login_in_flight.pop(reserved_key, None)
+                _login_attempts.setdefault(reserved_key, deque()).append(now)
+                setattr(request.state, _LOGIN_RESERVATION_STATE_KEY, None)
+                return
+
+        known_keys = set(_login_attempts) | set(_login_in_flight)
+        if key not in known_keys and len(known_keys) >= settings.login_rate_limit_max_buckets:
+            return
+        _login_attempts.setdefault(key, deque()).append(now)
+
+
+def _prune_login_attempts(cutoff: float) -> None:
+    for key, attempts in list(_login_attempts.items()):
+        while attempts and attempts[0] < cutoff:
+            attempts.popleft()
+        if not attempts:
+            _login_attempts.pop(key, None)
+    for key, reservations in list(_login_in_flight.items()):
+        for reservation, started_at in list(reservations.items()):
+            if started_at < cutoff:
+                reservations.pop(reservation, None)
+        if not reservations:
+            _login_in_flight.pop(key, None)
 
 
 def clear_login_attempts(request: Request | None = None) -> None:
     with _login_attempts_lock:
         if request is None:
             _login_attempts.clear()
+            _login_in_flight.clear()
         else:
-            _login_attempts.pop(login_bucket_key(request), None)
+            key = login_bucket_key(request)
+            _login_attempts.pop(key, None)
+            reservation_data = getattr(request.state, _LOGIN_RESERVATION_STATE_KEY, None)
+            if reservation_data is None:
+                _login_in_flight.pop(key, None)
+                return
+            reserved_key, reservation = reservation_data
+            reservations = _login_in_flight.get(reserved_key)
+            if reservations is not None:
+                reservations.pop(reservation, None)
+                if not reservations:
+                    _login_in_flight.pop(reserved_key, None)
+            setattr(request.state, _LOGIN_RESERVATION_STATE_KEY, None)

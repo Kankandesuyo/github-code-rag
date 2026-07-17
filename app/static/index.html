@@ -30,12 +30,23 @@
           <div class="brand-mark">GR</div>
           <div>
             <h1>GitHub Code RAG</h1>
-            <p>单仓库代码问答</p>
+            <p>可信代码理解工作台</p>
           </div>
         </div>
 
+        <section class="product-intro">
+          <h2>读懂陌生代码库，从一次导入开始</h2>
+          <p>导入公开 GitHub 仓库，获得带源码依据的问答、项目报告和 README。</p>
+        </section>
+
+        <ol id="onboardingSteps" class="onboarding-steps" aria-label="使用步骤">
+          <li><span>1</span><div><strong>导入</strong><small>读取安全文本文件</small></div></li>
+          <li><span>2</span><div><strong>理解</strong><small>建立代码检索索引</small></div></li>
+          <li><span>3</span><div><strong>交付</strong><small>问答并导出文档</small></div></li>
+        </ol>
+
         <section class="panel">
-          <label for="githubUrl">GitHub 仓库 URL</label>
+          <label for="githubUrl">导入 GitHub 仓库</label>
           <div class="repo-form">
             <input
               id="githubUrl"
@@ -45,13 +56,21 @@
             />
             <button id="loadRepoButton" type="button">导入</button>
           </div>
-          <p id="loadStatus" class="status-text"></p>
+          <div id="importProgress" class="import-progress" aria-live="polite">
+            <span class="progress-dot"></span>
+            <p id="loadStatus" class="status-text">等待导入公开仓库</p>
+          </div>
         </section>
 
         <section class="panel">
-          <label for="repositorySelect">已导入仓库</label>
+          <div class="panel-heading">
+            <label for="repositorySelect">最近项目</label>
+            <button id="refreshReposButton" class="icon-button" type="button" aria-label="刷新项目列表">↻</button>
+          </div>
           <select id="repositorySelect"></select>
-          <button id="refreshReposButton" class="secondary-button" type="button">刷新列表</button>
+          <div id="projectSummary" class="project-summary" aria-live="polite">
+            <p class="empty-summary">导入后将在这里显示索引统计。</p>
+          </div>
         </section>
 
         <section class="panel">
@@ -60,19 +79,19 @@
             <button id="reportButton" class="secondary-button" type="button">项目报告</button>
             <button id="readmeButton" class="secondary-button" type="button">生成 README</button>
           </div>
-          <p class="status-text">报告和 README 会展示 Agent 执行日志。</p>
+          <button id="deleteProjectButton" class="danger-button" type="button" disabled>删除项目</button>
         </section>
 
         <div class="sidebar-foot">
           <span class="dot"></span>
-          <span>Live API · 127.0.0.1:8200</span>
+          <span>Local-first · Same-origin API</span>
         </div>
       </aside>
 
       <main class="chat-area">
         <header class="chat-header">
           <div>
-            <h2>代码仓库对话</h2>
+            <h2>项目工作台</h2>
             <p id="activeRepoText">请选择或导入一个仓库</p>
           </div>
           <div class="header-actions">
@@ -96,7 +115,11 @@
                 <h3 id="artifactTitle">项目文档</h3>
                 <p id="artifactMeta">等待生成</p>
               </div>
-              <button id="closeArtifactButton" class="ghost-button" type="button">关闭</button>
+              <div class="artifact-actions">
+                <button id="copyArtifactButton" class="ghost-button" type="button">复制</button>
+                <button id="downloadArtifactButton" class="ghost-button" type="button">下载 .md</button>
+                <button id="closeArtifactButton" class="ghost-button" type="button">关闭</button>
+              </div>
             </div>
             <div id="artifactBody" class="artifact-body"></div>
             <div id="artifactLogs" class="artifact-log-shell"></div>
@@ -123,6 +146,18 @@
         </form>
       </main>
     </div>
+
+    <dialog id="deleteProjectDialog" class="confirm-dialog" aria-labelledby="deleteDialogTitle">
+      <form method="dialog">
+        <h2 id="deleteDialogTitle">删除这个项目？</h2>
+        <p>这会删除本地分析快照、索引信息和向量数据。GitHub 上的原仓库不会受到影响。</p>
+        <p id="deleteProjectName" class="delete-project-name"></p>
+        <div class="dialog-actions">
+          <button id="cancelDeleteButton" class="ghost-button" value="cancel" type="submit">取消</button>
+          <button id="confirmDeleteButton" class="danger-button" value="default" type="button">确认删除</button>
+        </div>
+      </form>
+    </dialog>
 
     <script src="/static/app.js"></script>
   </body>

@@ -19,6 +19,17 @@ class HashEmbeddingFunction:
     def __call__(self, input: Documents) -> Embeddings:
         return [self._embed_text(text) for text in input]
 
+    def embed_query(self, input: Documents) -> Embeddings:
+        return self(input)
+
+    @staticmethod
+    def name() -> str:
+        return "github_code_rag_hash"
+
+    def is_legacy(self) -> bool:
+        """Use Chroma's compatibility path for application-owned embeddings."""
+        return True
+
     def _embed_text(self, text: str) -> list[float]:
         vector = [0.0] * self.dimensions
         tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|[\u4e00-\u9fff]+|\d+", text.lower())
@@ -55,6 +66,17 @@ class SentenceTransformerEmbeddingFunction:
             show_progress_bar=False,
         )
         return embeddings.tolist()
+
+    def embed_query(self, input: Documents) -> Embeddings:
+        return self(input)
+
+    @staticmethod
+    def name() -> str:
+        return "github_code_rag_sentence_transformer"
+
+    def is_legacy(self) -> bool:
+        """Use Chroma's compatibility path for application-owned embeddings."""
+        return True
 
 
 @lru_cache

@@ -34,6 +34,29 @@ class RepositoryLoadResponse(BaseModel):
     removed_files_count: int = 0
 
 
+class RepositorySummaryResponse(BaseModel):
+    repository_id: str
+    owner_id: str | None = None
+    status: str
+    files_indexed: int
+    chunks_indexed: int
+    created_at: int | None = None
+    updated_at: int | None = None
+    github_url: str | None = None
+    default_branch: str | None = None
+
+
+class RepositoryListResponse(BaseModel):
+    repositories: list[str]
+    items: list[RepositorySummaryResponse]
+
+
+class RepositoryDeleteResponse(BaseModel):
+    repository_id: str
+    deleted: bool
+    collections_deleted: int
+
+
 class ChatRequest(BaseModel):
     repository_id: str = Field(..., min_length=1, max_length=140, pattern=r"^[A-Za-z0-9_.-]+$")
     question: str = Field(..., min_length=1, max_length=4000)

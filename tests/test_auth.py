@@ -133,7 +133,78 @@ def test_frontend_uses_session_login_without_local_storage_secrets():
 
     assert 'id="loginForm"' in html_content
     assert 'id="logoutButton"' in html_content
-    assert "localStorage" not in script_content
-    assert 'fetch("/auth/status"' in script_content
+    assert 'localStorage.setItem("activeRepositoryId"' in script_content
+    assert 'localStorage.getItem("activeRepositoryId"' in script_content
+    assert "localStorage.setItem(\"csrf" not in script_content
+    assert "localStorage.setItem(\"password" not in script_content
+    assert "localStorage.setItem(\"token" not in script_content
+    assert 'requestJson("/auth/status"' in script_content
     assert 'fetch("/auth/login"' in script_content
     assert 'fetch("/auth/logout"' in script_content
+
+
+def test_frontend_exposes_complete_beginner_workspace_contract():
+    html_content = Path("app/static/index.html").read_text(encoding="utf-8")
+    script_content = Path("app/static/app.js").read_text(encoding="utf-8")
+
+    assert 'name="viewport"' in html_content
+    assert "读懂陌生代码库，从一次导入开始" in html_content
+    assert 'id="onboardingSteps"' in html_content
+    assert 'id="projectSummary"' in html_content
+    assert 'id="importProgress"' in html_content
+    assert 'id="deleteProjectButton"' in html_content
+    assert 'id="deleteProjectDialog"' in html_content
+    assert 'aria-live="polite"' in html_content
+    assert "data.items" in script_content
+    assert 'method: "DELETE"' in script_content
+    assert 'getApiHeaders({}, true)' in script_content
+    assert "status === 401" in script_content
+    assert "status === 403" in script_content
+    assert "status === 429" in script_content
+    assert 'if (state.repositories.length === 0) {\n    state.activeRepositoryId = "";' in script_content
+    assert 'localStorage.removeItem("activeRepositoryId")' in script_content
+
+
+def test_frontend_supports_report_copy_and_markdown_download():
+    html_content = Path("app/static/index.html").read_text(encoding="utf-8")
+    script_content = Path("app/static/app.js").read_text(encoding="utf-8")
+
+    assert 'id="copyArtifactButton"' in html_content
+    assert 'id="downloadArtifactButton"' in html_content
+    assert "navigator.clipboard.writeText" in script_content
+    assert 'new Blob([state.artifact.markdown], { type: "text/markdown;charset=utf-8" })' in script_content
+
+
+def test_browser_responses_include_content_security_policy(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "admin_username", "", raising=False)
+    monkeypatch.setattr(settings, "admin_password_hash", "", raising=False)
+
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    policy = response.headers["content-security-policy"]
+    assert "default-src 'self'" in policy
+    assert "object-src 'none'" in policy
+    assert "frame-ancestors 'none'" in policy
+
+
+def test_unexpected_route_errors_do_not_expose_internal_details(monkeypatch):
+    import app.main as main_module
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "admin_username", "", raising=False)
+    monkeypatch.setattr(settings, "admin_password_hash", "", raising=False)
+    monkeypatch.setattr(settings, "rate_limit_max_requests", 0, raising=False)
+    monkeypatch.setattr(
+        main_module.report_service,
+        "build_project_report",
+        lambda _repository_id: (_ for _ in ()).throw(RuntimeError("C:\\secrets\\private-token.txt")),
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/repository/report/safe-project")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "project report generation failed"}
+    assert "private-token" not in response.text

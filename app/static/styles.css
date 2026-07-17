@@ -293,7 +293,7 @@ button:disabled {
 }
 
 .status-text.error {
-  color: #fecaca;
+  color: var(--danger);
 }
 
 .sidebar-foot {
@@ -865,5 +865,283 @@ button:disabled {
     inset: 12px;
     width: auto;
     max-height: calc(100vh - 24px);
+  }
+}
+
+.product-intro {
+  padding: 2px 4px 0;
+}
+
+.product-intro h2,
+.product-intro p {
+  margin: 0;
+}
+
+.product-intro h2 {
+  max-width: 260px;
+  color: #15263a;
+  font-size: 20px;
+  line-height: 1.35;
+  letter-spacing: -0.02em;
+}
+
+.product-intro p {
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.onboarding-steps {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0 4px;
+  list-style: none;
+}
+
+.onboarding-steps li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.onboarding-steps li > span {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(14, 165, 135, 0.26);
+  border-radius: 9px;
+  background: rgba(14, 165, 135, 0.1);
+  color: var(--accent-dark);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.onboarding-steps div {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+}
+
+.onboarding-steps strong {
+  color: #2b3c50;
+  font-size: 12px;
+}
+
+.onboarding-steps small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 10px;
+  color: var(--accent-dark);
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: var(--inner-light);
+}
+
+.import-progress {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.progress-dot,
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.project-summary {
+  min-height: 66px;
+  padding: 10px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.empty-summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.project-status {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: #2c3e50;
+  font-size: 12px;
+}
+
+.project-status .status-indicator {
+  margin-top: 0;
+}
+
+.project-summary dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.project-summary dl div {
+  min-width: 0;
+}
+
+.project-summary dt {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.project-summary dd {
+  overflow: hidden;
+  margin: 3px 0 0;
+  color: #1e3147;
+  font-size: 12px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.danger-button {
+  width: 100%;
+  border-color: rgba(180, 35, 24, 0.2);
+  color: var(--danger);
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow: var(--inner-light);
+}
+
+.danger-button:hover {
+  color: #fff;
+  background: #b42318;
+  box-shadow: 0 12px 28px rgba(180, 35, 24, 0.2);
+}
+
+.artifact-actions {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.confirm-dialog {
+  width: min(440px, calc(100vw - 32px));
+  border: 1px solid rgba(255, 255, 255, 0.76);
+  border-radius: 22px;
+  padding: 0;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 28px 80px rgba(24, 39, 58, 0.3);
+}
+
+.confirm-dialog::backdrop {
+  background: rgba(20, 31, 45, 0.48);
+  backdrop-filter: blur(8px);
+}
+
+.confirm-dialog form {
+  padding: 24px;
+}
+
+.confirm-dialog h2,
+.confirm-dialog p {
+  margin: 0;
+}
+
+.confirm-dialog h2 {
+  font-size: 20px;
+}
+
+.confirm-dialog p {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.delete-project-name {
+  overflow-wrap: anywhere;
+  color: var(--danger) !important;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-weight: 700;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.dialog-actions .danger-button {
+  width: auto;
+  padding-inline: 18px;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid rgba(14, 165, 135, 0.28);
+  outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+  .product-intro h2 {
+    max-width: none;
+  }
+
+  .onboarding-steps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .artifact-header {
+    flex-direction: column;
+  }
+
+  .artifact-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 560px) {
+  .onboarding-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-header,
+  .header-actions {
+    align-items: flex-start;
+  }
+
+  .chat-header {
+    flex-direction: column;
+  }
+
+  .header-actions {
+    width: 100%;
+    flex-wrap: wrap;
   }
 }

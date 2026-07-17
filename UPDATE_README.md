@@ -3029,3 +3029,99 @@ service shutdown -> port closed
 ```
 
 未验证边界：当前机器没有 Docker 命令，因此没有执行 `docker build` 或容器运行测试；相关文件已由 4 个静态交付测试覆盖，并将在 GitHub Actions 的 Python 3.12 环境继续验证代码测试。
+
+## 45. 产品成熟化：项目工作台与安全生命周期
+
+完成日期：2026-07-13。
+
+本轮目标是把已有的“能运行”基线推进为新手能独立使用的单管理员产品，同时保留未来 SaaS 数据结构的扩展点。
+
+### 产品闭环
+
+- 页面增加“导入 → 理解 → 交付”三步引导、明确的产品用途和导入状态。
+- `GET /repositories` 在保留旧 `repositories` 字符串数组的同时返回结构化 `items`，包含项目状态、文件数、代码片段数、默认分支和更新时间。
+- 新增 `GET /repositories/{repository_id}` 项目摘要接口。
+- 页面只用 `localStorage` 恢复最后选择的非敏感 `repository_id`；不保存密码、Session、CSRF token 或 API Key。
+- 项目报告和 README 支持复制与下载 Markdown。
+- 新增删除确认对话框和 `DELETE /repositories/{repository_id}`，同时清理项目运行目录和对应 Chroma 集合。
+- 桌面和移动端均保留完整导入、项目切换、问答、文档生成和删除入口。
+
+### 安全与未来 SaaS 边界
+
+- `RepositoryCatalogService` 集中负责项目目录读取和删除，不允许路由层接收任意路径。
+- 删除要求严格 `repository_id`、直接子目录根边界并拒绝软链接；向量清理通过 collection metadata 精确匹配项目。
+- 浏览器 Session 删除必须通过 CSRF；API Key 自动化保持兼容。
+- 增加 CSP 与 Permissions Policy，禁止第三方脚本、object、frame、摄像头、麦克风和定位。
+- 未预期异常不再把内部绝对路径或异常原文返回浏览器。
+- 响应中的 `owner_id=null` 只用于未来接口兼容，不宣称当前已经实现租户隔离。多用户化仍需要事务数据库和全链路所有权校验。
+
+### 新鲜验证证据
+
+```text
+python -m compileall -q app tests -> PASS
+python -m pip check -> No broken requirements found.
+python -m pytest tests -q -> 60 passed, 1 skipped, 16 warnings in 5.01s
+node --check app/static/app.js -> PASS
+git diff --check -> PASS
+```
+
+跳过项仅是 Windows 当前权限不允许创建目录软链接；代码仍显式拒绝仓库目录软链接。16 条 warning 仍来自 Python 3.13 与 Pydantic v1 兼容层，Docker/CI 基线为 Python 3.12。
+
+真实 Uvicorn `127.0.0.1:8201` 验证：
+
+```text
+GET / -> 200
+GET /health -> 200
+GET /auth/status -> 200
+GET /repositories -> 200
+GET /openapi.json -> 200
+GET /static/app.js -> 200
+GET /static/styles.css -> 200
+Content-Security-Policy -> present
+Permissions-Policy -> present
+shutdown -> port 8201 closed
+```
+
+Playwright 实际浏览器检查覆盖 1536×960 桌面和 390×844 移动视口：页面结构完整、删除确认框可打开和取消、浏览器控制台 0 errors / 0 warnings。本轮视觉概念图生成因图像服务网络错误未完成，因此界面在现有玻璃风格设计系统内升级，没有声称完成概念图像素级对照。
+
+Docker 当前补充检查：Docker daemon 29.6.1 可用，`docker compose config --quiet` 通过，`python:3.12-slim` 基础镜像可正常拉取；项目镜像首次安装大型 AI 依赖超过本轮 2 分钟和 5 分钟构建窗口，未生成项目镜像。按产品优先级停止继续等待，因此没有声称容器健康检查通过；本地 Uvicorn 和自动测试不受影响。
+
+## 46. 后端安全整改：部署、资源与供应链边界
+
+本轮把安全控制从“开发默认值”补齐到可审计的生产基线：
+
+- 区分本地威胁模型与生产威胁模型；生产模式校验认证、`ALLOWED_HOSTS`、`PUBLIC_BASE_URL`、HTTPS 和 `TLS_TERMINATED_BY_PROXY` 配置，缺失时拒绝启动。
+- 仓库导入增加 `MAX_REPOSITORY_REQUESTS`、目录数、总时限与 `MAX_CONCURRENT_IMPORTS=1` 预算，防止无限遍历和并发资源争抢。
+- 登录、导入和删除事件写入 `logs/security_audit.jsonl`，同时避免记录凭证和源码。
+- GitHub Actions 安装并运行 `pip-audit`；基础镜像按 digest 固定，Compose 禁止提权、删除全部 capabilities、限制 4 CPU/8 GiB 内存并保持 localhost 端口。
+- 生产反向代理需要限制请求体，例如 Nginx `client_max_body_size 1m;`。
+
+当前限流桶和导入信号量仍是单进程实现。若启动多个 worker 或多容器，必须改用 Redis 等共享限流、共享队列以及仓库级分布式锁；否则每个实例会独立计数，无法提供全局并发与速率保护。
+
+供应链实测先发现 12 个包的 59 条漏洞记录。兼容升级 FastAPI/Starlette、GitPython、LangChain/LangGraph、Chroma、Sentence Transformers/Transformers 和 pytest 后，`120 passed, 1 skipped`；二次扫描仅剩 `chromadb 1.5.9 / PYSEC-2026-311`。
+
+该记录对应 `CVE-2026-45829`（CVSS 9.3）。当前应用只使用 `PersistentClient`，不暴露 Chroma FastAPI `/api/v2`、不使用 `HttpClient`，集合创建/获取始终显式传入自有 `embedding_function`，所以公告中的远端恶意模型加载路径不可达。CI gate 只允许这一项精准豁免并在 `2026-08-13` 到期；届时自动移除豁免并失败关闭。Chroma 发布修复版本，或项目引入远端 Chroma 服务、外部集合配置时，都必须提前移除豁免。上游公告：https://github.com/advisories/GHSA-f4j7-r4q5-qw2c
+
+## 47. 2026-07-17 依赖修复、测试入口与实机复验
+
+本轮先处理会阻断 CI 的供应链问题。`pip-audit` 在原 `transformers 5.3.0` 上发现 `CVE-2026-5241`，修复版本为 `5.5.0`。项目已固定到 `transformers==5.5.0`，并与 `sentence-transformers 5.6.0` 完成导入和全量回归验证。
+
+新增 `pytest.ini`，把默认测试根目录限制为 `tests/`，并排除 `repos/`、`chroma_db/`、`dist/` 和 `.venv/`。修复前直接运行 `pytest` 会误收集已导入 FastAPI 仓库的测试并产生 327 个收集错误；修复后默认命令只执行本项目测试。
+
+验证结果：
+
+```text
+python -m pytest -q -> 147 passed, 1 skipped, 1 warning
+python -m compileall -q app tests -> PASS
+python -m pip check -> No broken requirements found.
+node --check app/static/app.js -> PASS
+transformers -> 5.5.0
+sentence-transformers -> 5.6.0
+python scripts/run_pip_audit.py -> No known vulnerabilities found, 1 ignored
+```
+
+唯一跳过项仍是 Windows 环境无法创建目录软链接；唯一忽略项仍是带 `2026-08-13` 自动到期门禁的 `PYSEC-2026-311`。
+
+Uvicorn 在 `127.0.0.1:8210` 实机启动成功，首页、静态资源、认证状态、仓库列表和聊天接口均返回 200。Playwright 完成页面加载、项目切换和真实提问，浏览器控制台为 0 errors / 0 warnings。现有 `repos/` 中多数目录属于旧版导入产物，缺少当前 catalog/index manifest，因此页面会明确显示“索引不完整”；为避免擅自删除本地数据，本轮保留这些目录，后续使用者可重新导入对应仓库生成新格式索引。
+
+Docker Compose 配置仍能通过解析，但本次 Docker Desktop 启动失败。诊断显示 BIOS 虚拟化已开启，而 Windows 当前 `HypervisorPresent=False`，WSL 提示需要启用虚拟机平台；查询或修改 Windows 可选功能需要管理员权限并可能要求重启。因此本轮没有声称容器镜像和健康检查已经重新通过。

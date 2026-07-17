@@ -310,7 +310,7 @@ def llm_rerank_chunks(question: str, chunks: list[dict]) -> list[dict]:
                 "source": f"{metadata['file_path']}#{metadata['chunk_index']} lines {metadata.get('start_line', '?')}-{metadata.get('end_line', '?')}",
                 "symbol": metadata.get("symbol_name", ""),
                 "local_rerank_score": round(float(chunk.get("rerank_score", 0.0)), 3),
-                "preview": chunk["content"][:700],
+                "preview": redact_sensitive_text(chunk["content"])[:700],
             }
         )
 
@@ -431,7 +431,7 @@ def answer_question(question: str, chunks: list[dict]) -> str:
             temperature=0.1,
         )
     except Exception as exc:
-        raise LLMServiceError(f"failed to call DeepSeek API: {exc}") from exc
+        raise LLMServiceError("answer generation failed") from exc
 
     answer = response.choices[0].message.content
     if not answer:

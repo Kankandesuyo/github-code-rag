@@ -193,6 +193,52 @@ LOGIN_RATE_LIMIT_MAX_ATTEMPTS=5
 
 生产 HTTPS 环境必须设置 `AUTH_COOKIE_SECURE=true` 和 `FORCE_HTTPS=true`。浏览器使用 `HttpOnly + SameSite=Strict` 签名 Cookie，写操作还需要 Session 中的 CSRF token。`APP_API_KEY` 可继续供脚本或自动化客户端通过 `X-API-Key` 使用。
 
+### 部署威胁模型与生产基线
+
+**本地威胁模型**：默认 `DEPLOYMENT_MODE=local` 只面向可信开发者的本机回环地址，允许不配置登录，方便调试。它不承诺抵御同一局域网内的恶意访问者，也不应直接绑定公网地址；Compose 默认只发布 `127.0.0.1:8000`。
+
+**生产威胁模型**：假设公网请求、伪造 `Host`、口令猜测、跨站请求、恶意仓库内容和资源耗尽都会发生。生产环境使用 `DEPLOYMENT_MODE=production`，应用会在认证或传输安全配置不完整时拒绝启动。至少配置：
+
+```env
+DEPLOYMENT_MODE=production
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD_HASH=生成的scrypt哈希
+AUTH_SESSION_SECRET=至少32字符的随机密钥
+AUTH_COOKIE_SECURE=true
+ALLOWED_HOSTS=rag.example.com
+PUBLIC_BASE_URL=https://rag.example.com
+FORCE_HTTPS=true
+# 只有 HTTPS 在可信反向代理终止时才改为 true
+TLS_TERMINATED_BY_PROXY=false
+```
+
+也可以使用至少 32 字符的 `APP_API_KEY` 作为生产 API 认证。不要把 `ALLOWED_HOSTS` 设为 `*`；`PUBLIC_BASE_URL` 必须是用户实际访问的 HTTPS 地址。
+
+反向代理必须限制请求体，避免超大 JSON 在进入应用前消耗内存。Nginx 示例：
+
+```nginx
+server {
+    client_max_body_size 1m;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_pass http://127.0.0.1:8000;
+}
+```
+
+仓库导入由 `MAX_REPOSITORY_DIRECTORIES`、`MAX_REPOSITORY_REQUESTS`、`REPOSITORY_IMPORT_TIMEOUT_SECONDS` 和 `MAX_CONCURRENT_IMPORTS=1` 共同限制目录数、外部请求数、总时长和并发。当前 staging 与向量更新按单进程设计，因此不要把导入并发调高；扩展到多实例时应使用共享队列和仓库级分布式锁。
+
+登录、仓库导入和删除的成功/失败事件写入 `logs/security_audit.jsonl`。记录只包含时间、事件、结果、客户端摘要和仓库 ID 的 SHA-256 指纹，不记录原始仓库 ID、密码、Token、问题或源码。该文件应接入日志轮转与受限读取权限。
+
+JSONL 写入锁只保护当前 Python 进程内的线程；多个 worker 或容器同时写同一文件时，记录可能交错，不能把本地文件当作可靠的多进程审计存储。多进程部署必须把审计事件汇聚到集中日志系统或其他支持并发写入的服务。
+
+当前登录与业务限流桶、导入信号量都在单个 Python 进程内。多 worker 或多容器会各自计数，不能形成全局保护；生产横向扩展应使用 Redis 等共享限流存储，并通过共享队列统一调度导入任务。
+
+### Chroma 临时安全豁免
+
+`CVE-2026-45829`（`PYSEC-2026-311`，CVSS 9.3）影响 Chroma 的远端模型加载路径。当前项目只创建本地 `PersistentClient`，不启动 Chroma FastAPI `/api/v2` 服务、不使用 `HttpClient`，而且集合创建和获取都显式传入项目自有 `embedding_function`，因此公告描述的远端恶意模型入口在当前架构中不可达。
+
+CI 只对该公告设置到 `2026-08-13` 前有效的精准豁免；到期当天自动移除豁免并恢复 audit 失败。若 Chroma 提前发布修复版本，应升级并立即移除豁免；如果项目开始暴露 Chroma 服务、使用 `HttpClient`、接受外部集合配置或不再显式传入 embedding function，也必须立即移除豁免并重新评估。上游公告：[GHSA-f4j7-r4q5-qw2c](https://github.com/advisories/GHSA-f4j7-r4q5-qw2c)。
+
 ## 启动
 
 ```powershell
@@ -234,6 +280,18 @@ docker compose ps
 
 访问 `http://127.0.0.1:8000/`。`repos` 和 `chroma_db` 使用 Docker named volumes 持久化；镜像内部以非 root 用户运行，并通过 `/health` 执行健康检查。
 
+## 产品工作台怎么使用
+
+页面按“导入 → 理解 → 交付”组织，新手不需要先阅读 API 文档：
+
+1. 在左侧粘贴公开 GitHub 仓库地址并点击“导入”。页面会显示当前处理状态，后端只读取经过安全过滤的文本文件。
+2. 导入成功后，“最近项目”会保存项目入口。刷新浏览器只会在本地记住最后选择的 `repository_id`，不会保存密码、Session、CSRF token 或 API Key。
+3. 项目摘要展示文件数、代码片段数、默认分支和索引状态。可以直接提问，也可以生成项目报告或 README。
+4. 报告和 README 可以复制或下载为 Markdown 文件。
+5. “删除项目”只删除本机的分析快照、manifest 和对应 Chroma 集合，不会修改 GitHub 原仓库。浏览器 Session 删除操作必须通过 CSRF 校验。
+
+`GET /repositories` 为旧客户端保留 `repositories: string[]`，同时新增结构化 `items`；`GET /repositories/{repository_id}` 返回项目摘要，`DELETE /repositories/{repository_id}` 执行受控删除。响应中的 `owner_id` 当前固定为 `null`，只用于保留未来 SaaS 数据结构兼容性，**不表示当前已经实现多用户或租户隔离**。
+
 停止服务：
 
 ```powershell
@@ -244,9 +302,10 @@ docker compose down
 
 ## 测试
 
-当前项目测试位于 `tests/`，运行时只指定项目测试目录，避免扫描运行时索引元数据：
+当前项目测试位于 `tests/`。`pytest.ini` 已把默认测试根目录限制为 `tests/`，并排除 `repos/`、`chroma_db/`、`dist/` 和虚拟环境，因此以下两种命令都不会误扫描已导入仓库：
 
 ```powershell
+.\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
@@ -314,12 +373,12 @@ curl.exe -X POST http://127.0.0.1:8000/repository/load `
 GitHub API 获取默认分支 -> GitHub API 递归读取文件树 -> GitHub API 读取单个受支持文件 -> 切分 chunk -> 写入 Chroma
 ```
 
-`repos/<repository_id>/` 现在只保存 `.codebase_agent` 下的索引 manifest 和远程遍历元数据，不保存仓库源码文件。
+`repos/<repository_id>/` 保存 `.codebase_agent` 下的索引 manifest、远程遍历元数据，以及经过安全过滤的 `source_snapshot/` 文本分析快照。它不是完整 Git 仓库，不包含 `.git` 历史、敏感文件、二进制或被过滤的超大文件。
 
 如果 GitHub 匿名 API 被限流，系统会自动尝试：
 
 ```text
-GitHub 网页目录 -> 页面内嵌文件树数据 -> raw.githubusercontent.com 读取单个受支持文件 -> 切分 chunk -> 写入 Chroma
+GitHub 网页目录 -> 页面内嵌文件树数据 -> raw.githubusercontent.com 读取单个受支持文件 -> 安全文本快照 -> 切分 chunk -> 写入 Chroma
 ```
 
 ### 3. 仓库问答

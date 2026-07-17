@@ -25,8 +25,21 @@ const loginPassword = document.querySelector("#loginPassword");
 const loginButton = document.querySelector("#loginButton");
 const loginStatus = document.querySelector("#loginStatus");
 const logoutButton = document.querySelector("#logoutButton");
+const projectSummary = document.querySelector("#projectSummary");
+const deleteProjectButton = document.querySelector("#deleteProjectButton");
+const deleteProjectDialog = document.querySelector("#deleteProjectDialog");
+const deleteProjectName = document.querySelector("#deleteProjectName");
+const confirmDeleteButton = document.querySelector("#confirmDeleteButton");
+const copyArtifactButton = document.querySelector("#copyArtifactButton");
+const downloadArtifactButton = document.querySelector("#downloadArtifactButton");
 let csrfToken = "";
 let authEnabled = false;
+const state = {
+  repositories: [],
+  activeRepositoryId: localStorage.getItem("activeRepositoryId") || "",
+  isLoading: false,
+  artifact: null,
+};
 
 const welcomeMessage =
   "先在左侧导入 GitHub 仓库，然后像聊天一样直接提问。我会基于检索到的代码片段回答，并列出来源文件。";
@@ -37,6 +50,45 @@ function getApiHeaders(extraHeaders = {}, includeCsrf = false) {
     headers["X-CSRF-Token"] = csrfToken;
   }
   return headers;
+}
+
+function friendlyError(status, detail = "") {
+  if (status === 401) {
+    showLogin("登录已过期，请重新登录。");
+    return "登录已过期，请重新登录。";
+  }
+  if (status === 403) {
+    return "安全校验失败，请刷新页面后重试。";
+  }
+  if (status === 429) {
+    return "请求过于频繁，请稍等一分钟后重试。";
+  }
+  if (status === 400) {
+    return detail || "输入不符合要求，请检查仓库地址。";
+  }
+  if (status >= 500) {
+    return "服务暂时无法完成操作，请检查后端配置或稍后重试。";
+  }
+  return detail || "操作失败，请重试。";
+}
+
+async function requestJson(url, options = {}) {
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (_error) {
+    throw new Error("无法连接后端，请确认服务已经启动。");
+  }
+  let data = {};
+  try {
+    data = await response.json();
+  } catch (_error) {
+    data = {};
+  }
+  if (!response.ok) {
+    throw new Error(friendlyError(response.status, data.detail));
+  }
+  return data;
 }
 
 function showLogin(message = "") {
@@ -53,11 +105,7 @@ function hideLogin() {
 }
 
 async function initializeAuth() {
-  const response = await fetch("/auth/status");
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.detail || "读取登录状态失败");
-  }
+  const data = await requestJson("/auth/status");
   authEnabled = data.enabled === true;
   csrfToken = data.csrf_token || "";
   if (authEnabled && !data.authenticated) {
@@ -108,7 +156,7 @@ async function logout() {
 }
 
 function getActiveRepositoryId() {
-  return repositorySelect.value;
+  return state.activeRepositoryId || repositorySelect.value;
 }
 
 function setStatus(text, isError = false) {
@@ -119,6 +167,35 @@ function setStatus(text, isError = false) {
 function updateActiveRepoText() {
   const repositoryId = getActiveRepositoryId();
   activeRepoText.textContent = repositoryId ? `当前仓库：${repositoryId}` : "请选择或导入一个仓库";
+  deleteProjectButton.disabled = !repositoryId;
+  const item = state.repositories.find((repository) => repository.repository_id === repositoryId);
+  if (!item) {
+    projectSummary.innerHTML = '<p class="empty-summary">导入后将在这里显示索引统计。</p>';
+    return;
+  }
+  projectSummary.innerHTML = "";
+  const status = document.createElement("div");
+  status.className = "project-status";
+  const indicator = document.createElement("span");
+  indicator.className = "status-indicator";
+  const statusText = document.createElement("strong");
+  statusText.textContent = item.status === "ready" ? "分析就绪" : "索引不完整";
+  status.append(indicator, statusText);
+  const metrics = document.createElement("dl");
+  for (const [label, value] of [
+    ["文件", item.files_indexed],
+    ["代码片段", item.chunks_indexed],
+    ["分支", item.default_branch || "未知"],
+  ]) {
+    const metric = document.createElement("div");
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+    term.textContent = label;
+    description.textContent = String(value);
+    metric.append(term, description);
+    metrics.appendChild(metric);
+  }
+  projectSummary.append(status, metrics);
 }
 
 function appendMessage(role, content, sources = [], options = {}) {
@@ -298,6 +375,7 @@ function renderMessageContent(content) {
 }
 
 function openArtifact({ title, meta, markdown, logs = [] }) {
+  state.artifact = { title, meta, markdown };
   artifactTitle.textContent = title;
   artifactMeta.textContent = meta;
   artifactBody.innerHTML = "";
@@ -312,6 +390,7 @@ function openArtifact({ title, meta, markdown, logs = [] }) {
 }
 
 function closeArtifact() {
+  state.artifact = null;
   artifactPanel.classList.add("is-hidden");
 }
 
@@ -330,28 +409,35 @@ function requireRepository() {
 }
 
 async function refreshRepositories(selectedId = "") {
-  const response = await fetch("/repositories", { headers: getApiHeaders() });
-  if (!response.ok) {
-    throw new Error("读取仓库列表失败");
-  }
-  const data = await response.json();
+  const data = await requestJson("/repositories", { headers: getApiHeaders() });
+  state.repositories = data.items || (data.repositories || []).map((repositoryId) => ({
+    repository_id: repositoryId,
+    status: "ready",
+    files_indexed: 0,
+    chunks_indexed: 0,
+    default_branch: null,
+  }));
   repositorySelect.innerHTML = "";
 
-  if (data.repositories.length === 0) {
+  if (state.repositories.length === 0) {
+    state.activeRepositoryId = "";
+    localStorage.removeItem("activeRepositoryId");
     const option = document.createElement("option");
     option.value = "";
     option.textContent = "暂无仓库";
     repositorySelect.appendChild(option);
   } else {
-    for (const repositoryId of data.repositories) {
+    for (const repository of state.repositories) {
       const option = document.createElement("option");
-      option.value = repositoryId;
-      option.textContent = repositoryId;
+      option.value = repository.repository_id;
+      option.textContent = repository.repository_id;
       repositorySelect.appendChild(option);
     }
-    if (selectedId) {
-      repositorySelect.value = selectedId;
-    }
+    const requestedId = selectedId || state.activeRepositoryId;
+    const exists = state.repositories.some((repository) => repository.repository_id === requestedId);
+    state.activeRepositoryId = exists ? requestedId : state.repositories[0].repository_id;
+    repositorySelect.value = state.activeRepositoryId;
+    localStorage.setItem("activeRepositoryId", state.activeRepositoryId);
   }
 
   updateActiveRepoText();
@@ -364,19 +450,17 @@ async function loadRepository() {
     return;
   }
 
+  state.isLoading = true;
   loadRepoButton.disabled = true;
-  setStatus("正在通过 GitHub API 远程遍历项目并建立索引，不会 clone 或下载仓库到本地...");
+  loadRepoButton.textContent = "分析中…";
+  setStatus("正在读取仓库文件、过滤敏感内容并建立代码索引…");
 
   try {
-    const response = await fetch("/repository/load", {
+    const data = await requestJson("/repository/load", {
       method: "POST",
       headers: getApiHeaders({ "Content-Type": "application/json" }, true),
       body: JSON.stringify({ github_url: githubUrl }),
     });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.detail || "导入失败");
-    }
 
     const indexStatus = data.index_cached
       ? "索引未变化，已复用缓存"
@@ -387,7 +471,9 @@ async function loadRepository() {
   } catch (error) {
     setStatus(error.message, true);
   } finally {
+    state.isLoading = false;
     loadRepoButton.disabled = false;
+    loadRepoButton.textContent = "导入";
   }
 }
 
@@ -499,6 +585,79 @@ async function generateReadme() {
   }
 }
 
+function selectRepository() {
+  state.activeRepositoryId = repositorySelect.value;
+  if (state.activeRepositoryId) {
+    localStorage.setItem("activeRepositoryId", state.activeRepositoryId);
+  } else {
+    localStorage.removeItem("activeRepositoryId");
+  }
+  closeArtifact();
+  resetMessages();
+  updateActiveRepoText();
+}
+
+function openDeleteDialog() {
+  const repositoryId = getActiveRepositoryId();
+  if (!repositoryId) {
+    return;
+  }
+  deleteProjectName.textContent = repositoryId;
+  deleteProjectDialog.showModal();
+}
+
+async function deleteActiveRepository() {
+  const repositoryId = getActiveRepositoryId();
+  if (!repositoryId) {
+    return;
+  }
+  confirmDeleteButton.disabled = true;
+  confirmDeleteButton.textContent = "删除中…";
+  try {
+    await requestJson(`/repositories/${encodeURIComponent(repositoryId)}`, {
+      method: "DELETE",
+      headers: getApiHeaders({}, true),
+    });
+    deleteProjectDialog.close();
+    state.activeRepositoryId = "";
+    localStorage.removeItem("activeRepositoryId");
+    closeArtifact();
+    resetMessages();
+    setStatus(`已删除本地项目：${repositoryId}`);
+    await refreshRepositories();
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    confirmDeleteButton.disabled = false;
+    confirmDeleteButton.textContent = "确认删除";
+  }
+}
+
+async function copyArtifact() {
+  if (!state.artifact) {
+    return;
+  }
+  await navigator.clipboard.writeText(state.artifact.markdown);
+  copyArtifactButton.textContent = "已复制";
+  window.setTimeout(() => {
+    copyArtifactButton.textContent = "复制";
+  }, 1600);
+}
+
+function downloadArtifact() {
+  if (!state.artifact) {
+    return;
+  }
+  const blob = new Blob([state.artifact.markdown], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const safeTitle = state.artifact.title.replace(/[^A-Za-z0-9\u4e00-\u9fff_-]+/g, "-");
+  link.href = url;
+  link.download = `${safeTitle || "code-rag-artifact"}.md`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 questionInput.addEventListener("input", () => {
   questionInput.style.height = "auto";
   questionInput.style.height = `${questionInput.scrollHeight}px`;
@@ -513,12 +672,16 @@ questionInput.addEventListener("keydown", (event) => {
 
 loadRepoButton.addEventListener("click", loadRepository);
 refreshReposButton.addEventListener("click", () => refreshRepositories().catch((error) => setStatus(error.message, true)));
-repositorySelect.addEventListener("change", updateActiveRepoText);
+repositorySelect.addEventListener("change", selectRepository);
 chatForm.addEventListener("submit", sendQuestion);
 clearChatButton.addEventListener("click", resetMessages);
 reportButton.addEventListener("click", generateProjectReport);
 readmeButton.addEventListener("click", generateReadme);
 closeArtifactButton.addEventListener("click", closeArtifact);
+deleteProjectButton.addEventListener("click", openDeleteDialog);
+confirmDeleteButton.addEventListener("click", deleteActiveRepository);
+copyArtifactButton.addEventListener("click", () => copyArtifact().catch((error) => setStatus(error.message, true)));
+downloadArtifactButton.addEventListener("click", downloadArtifact);
 loginForm.addEventListener("submit", login);
 logoutButton.addEventListener("click", () => logout().catch((error) => appendMessage("assistant", `出错了：${error.message}`)));
 quickPromptButtons.forEach((button) => {

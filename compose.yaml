@@ -3,7 +3,7 @@ services:
     build:
       context: .
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     environment:
@@ -12,6 +12,12 @@ services:
     volumes:
       - repos:/app/repos
       - chroma_db:/app/chroma_db
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cpus: "4.0"
+    mem_limit: 8g
     restart: unless-stopped
 
 volumes:

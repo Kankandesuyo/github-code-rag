@@ -224,6 +224,30 @@ localStorage.setItem("githubCodeRagApiKey", "你的APP_API_KEY")
 - 这是轻量级共享密钥保护，不等价于完整用户系统。
 - 多用户部署仍需要用户表、仓库归属表、会话过期、权限校验和审计日志。
 
+## 2026-07-13 生产部署与供应链加固
+
+### 威胁模型
+
+- 本地威胁模型：`DEPLOYMENT_MODE=local` 只适用于可信开发者本机，默认免登录能力不能暴露到局域网或公网。
+- 生产威胁模型：按不可信网络、伪造 Host、暴力登录、恶意仓库输入、上游异常泄漏和资源耗尽处理。
+- 生产模式要求有效认证、HTTPS 或可信代理终止 TLS，并校验 `ALLOWED_HOSTS`；重定向使用固定 `PUBLIC_BASE_URL`，代理终止 HTTPS 时显式设置 `TLS_TERMINATED_BY_PROXY=true`。
+
+### 纵深防御
+
+- CI 运行 `pip-audit`，除期限化精准豁免外，任何漏洞结果都会直接使任务失败。
+- 2026-07-13 实际扫描最初报告 12 个包的 59 条记录；升级兼容栈后二次扫描只剩 `chromadb 1.5.9 / PYSEC-2026-311`。
+- 该记录对应 `CVE-2026-45829`（CVSS 9.3）：攻击需要 Chroma FastAPI `/api/v2` 接收带 `trust_remote_code` 的恶意模型配置，或 `HttpClient` 获取被投毒集合且调用方未显式提供 embedding function。项目只使用本地 `PersistentClient`，不暴露 Chroma 服务，并在每次集合创建/获取时传入项目自有 `embedding_function`，当前攻击路径不可达。
+- 精准豁免仅允许 `PYSEC-2026-311`，截止 `2026-08-13`；到期当天 gate 不再传递 ignore，任何新漏洞也不会被放行。Chroma 发布修复版、项目改用 `HttpClient`、暴露 Chroma API、接受外部集合配置或移除自有 embedding function 时，必须立即移除豁免并重新审计。
+- 上游公告：https://github.com/advisories/GHSA-f4j7-r4q5-qw2c
+- Docker 基础镜像按 digest 固定，应用仍由非 root `appuser` 运行；Compose 设置 `no-new-privileges:true`、`cap_drop: ALL`、4 CPU 和 8 GiB 内存上限，只发布 localhost 端口。
+- 反向代理需在应用之前限制请求体，例如 Nginx `client_max_body_size 1m;`。
+- 导入预算由 `MAX_REPOSITORY_DIRECTORIES`、`MAX_REPOSITORY_REQUESTS`、`REPOSITORY_IMPORT_TIMEOUT_SECONDS` 与 `MAX_CONCURRENT_IMPORTS=1` 构成，限制遍历、外部请求、总耗时和并发占用。
+- 安全审计采用 JSONL，默认路径 `logs/security_audit.jsonl`，覆盖登录、仓库导入和删除的成功/失败结果；仓库 ID 仅保存 SHA-256 指纹，不记录原值、密码、Token 或源码。
+
+### 扩展边界
+
+当前登录限流、业务限流和导入信号量均为单进程内存状态。多 worker/多容器部署会形成各自独立的计数器，不能当作全局防护。JSONL 审计锁也只覆盖单个 Python 进程，多个进程直接追加同一文件可能造成记录交错。横向扩展前必须引入 Redis 等共享限流存储、共享队列和仓库级分布式锁；安全审计应汇聚到集中日志平台并配置留存和告警。
+
 ### SEC-012 业务接口内存限流
 
 记录时间：2026-06-19 +08:00
@@ -442,3 +466,31 @@ MAX_ARCHIVE_DOWNLOAD_BYTES=200000000
 - 健康检查只访问公开 `/health`。
 - 仓库分析快照和 Chroma 数据通过独立 named volumes 持久化。
 - 当前机器没有 Docker，尚未进行本机镜像构建和容器运行验证。
+
+# SEC-021：项目目录、安全删除与浏览器边界
+
+状态：已完成。
+
+- 新增 `RepositoryCatalogService`，HTTP 路由不再直接扫描和拼装运行目录；损坏的可选 manifest 会被跳过并记录不含源码内容的警告，不会拖垮整个项目列表。
+- 项目删除只接受严格格式的 `repository_id`，要求目标是 `repos/` 的直接子目录，并拒绝软链接和解析后越界的路径。
+- Chroma 清理根据 collection metadata 中完全匹配的 `repository_id` 删除，不使用可能误删其他项目的名称前缀匹配。
+- `DELETE /repositories/{repository_id}` 继续使用现有鉴权；浏览器 Session 必须携带匹配的 CSRF token，API Key 自动化客户端保持兼容。
+- 浏览器只在 `localStorage` 保存非敏感的活动 `repository_id`。密码、Cookie Session、CSRF token 和 API Key 均不写入浏览器持久存储。
+- 所有响应增加 Content Security Policy 和 Permissions Policy；页面只加载同源脚本、样式和接口，禁止 object、第三方 frame、摄像头、麦克风和定位能力。
+- 未预期异常只向客户端返回稳定的操作失败信息，不再拼接内部异常、绝对路径或潜在敏感内容。
+
+SaaS 边界：结构化摘要包含 `owner_id=null` 作为未来数据模型兼容点，但当前仍是单管理员产品。启用多用户前必须迁移到事务数据库，并在目录、详情、问答、报告、导出和删除的每条路径实施所有权校验。
+
+# SEC-022：Transformers 漏洞修复与默认测试隔离
+
+记录时间：2026-07-17 +09:00
+
+状态：已完成。
+
+- `pip-audit` 在 `transformers 5.3.0` 上报告 `CVE-2026-5241`，已升级并固定为修复版本 `5.5.0`。
+- 升级后 `sentence-transformers 5.6.0` 可正常导入，完整项目测试为 `147 passed, 1 skipped`。
+- 供应链门禁重新通过：`No known vulnerabilities found, 1 ignored`；忽略项仅为既有、自动到期的 `PYSEC-2026-311`。
+- 新增 `pytest.ini`，默认只收集 `tests/`，避免把 `repos/` 中不可信第三方仓库测试当成本项目代码执行或收集。
+- `.playwright-cli/` 已加入忽略列表，浏览器实机验收产物不进入交付版本。
+
+容器复验边界：Docker Compose 配置解析通过，但当前 Windows hypervisor/WSL 虚拟机平台未就绪，Docker daemon 无法启动；该系统级问题需要管理员权限和可能的重启，不属于应用代码回归失败。

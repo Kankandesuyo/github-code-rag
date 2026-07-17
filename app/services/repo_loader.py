@@ -5,8 +5,13 @@ import html
 import json
 import re
 import shutil
+import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from pathlib import Path
 from pathlib import PurePosixPath
+from typing import Callable, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request, urlopen
@@ -18,6 +23,77 @@ from app.utils.file_utils import should_ignore_dir, should_ignore_file
 
 class RepositoryLoadError(RuntimeError):
     pass
+
+
+@dataclass
+class ImportBudget:
+    max_requests: int
+    max_directories: int
+    timeout_seconds: float
+    clock: Callable[[], float] = field(default=time.monotonic, repr=False)
+    outbound_requests: int = 0
+    visited_directories: int = 0
+    _deadline: float = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.max_requests < 1 or self.max_directories < 1 or self.timeout_seconds <= 0:
+            raise ValueError("repository import budget limits must be positive")
+        self._deadline = self.clock() + self.timeout_seconds
+
+    @classmethod
+    def from_settings(cls) -> "ImportBudget":
+        settings = get_settings()
+        return cls(
+            max_requests=settings.max_repository_requests,
+            max_directories=settings.max_repository_directories,
+            timeout_seconds=settings.repository_import_timeout_seconds,
+        )
+
+    def check_deadline(self) -> None:
+        self.remaining_seconds()
+
+    def remaining_seconds(self) -> float:
+        remaining = self._deadline - self.clock()
+        if remaining <= 0:
+            raise RepositoryLoadError("repository import deadline exceeded")
+        return remaining
+
+    def effective_timeout(self, configured_timeout_seconds: float) -> float:
+        return min(float(configured_timeout_seconds), self.remaining_seconds())
+
+    def record_request(self) -> None:
+        self.check_deadline()
+        if self.outbound_requests >= self.max_requests:
+            raise RepositoryLoadError("repository import request limit exceeded")
+        self.outbound_requests += 1
+
+    def record_directory(self) -> None:
+        self.check_deadline()
+        if self.visited_directories >= self.max_directories:
+            raise RepositoryLoadError("repository import directory limit exceeded")
+        self.visited_directories += 1
+
+
+_ACTIVE_IMPORT_BUDGET: ContextVar[ImportBudget | None] = ContextVar(
+    "active_repository_import_budget",
+    default=None,
+)
+
+
+def _resolve_import_budget(budget: ImportBudget | None = None) -> ImportBudget | None:
+    return budget if budget is not None else _ACTIVE_IMPORT_BUDGET.get()
+
+
+@contextmanager
+def activate_import_budget(budget: ImportBudget) -> Iterator[None]:
+    if _ACTIVE_IMPORT_BUDGET.get() is budget:
+        yield
+        return
+    token = _ACTIVE_IMPORT_BUDGET.set(budget)
+    try:
+        yield
+    finally:
+        _ACTIVE_IMPORT_BUDGET.reset(token)
 
 
 GITHUB_OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
@@ -87,11 +163,26 @@ def build_github_headers(accept: str = "application/vnd.github+json") -> dict[st
     return headers
 
 
-def fetch_github_json(url: str, timeout_seconds: int) -> dict:
+def fetch_github_json(
+    url: str,
+    timeout_seconds: int,
+    budget: ImportBudget | None = None,
+) -> dict:
     request = Request(url, headers=build_github_headers())
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
-            return json.loads(response.read().decode("utf-8"))
+        active_budget = _resolve_import_budget(budget)
+        if active_budget is not None:
+            active_budget.record_request()
+        request_timeout = (
+            active_budget.effective_timeout(timeout_seconds)
+            if active_budget is not None
+            else timeout_seconds
+        )
+        with urlopen(request, timeout=request_timeout) as response:
+            data = response.read()
+            if active_budget is not None:
+                active_budget.check_deadline()
+            return json.loads(data.decode("utf-8"))
     except HTTPError as exc:
         if exc.code == 404:
             raise RepositoryLoadError("GitHub repository or file was not found") from exc
@@ -104,17 +195,34 @@ def fetch_github_json(url: str, timeout_seconds: int) -> dict:
         raise RepositoryLoadError("GitHub API returned invalid JSON") from exc
 
 
-def fetch_url_bytes(url: str, timeout_seconds: int, accept: str, max_bytes: int | None = None) -> bytes:
+def fetch_url_bytes(
+    url: str,
+    timeout_seconds: int,
+    accept: str,
+    max_bytes: int | None = None,
+    budget: ImportBudget | None = None,
+) -> bytes:
     request = Request(url, headers=build_github_headers(accept=accept))
     try:
-        with urlopen(request, timeout=timeout_seconds) as response:
+        active_budget = _resolve_import_budget(budget)
+        if active_budget is not None:
+            active_budget.record_request()
+        request_timeout = (
+            active_budget.effective_timeout(timeout_seconds)
+            if active_budget is not None
+            else timeout_seconds
+        )
+        with urlopen(request, timeout=request_timeout) as response:
             content_length = response.headers.get("Content-Length")
             if max_bytes is not None and content_length and int(content_length) > max_bytes:
                 raise RepositoryLoadError("remote GitHub file is too large")
             if max_bytes is None:
-                return response.read()
-            data = response.read(max_bytes + 1)
-            if len(data) > max_bytes:
+                data = response.read()
+            else:
+                data = response.read(max_bytes + 1)
+            if active_budget is not None:
+                active_budget.check_deadline()
+            if max_bytes is not None and len(data) > max_bytes:
                 raise RepositoryLoadError("remote GitHub file exceeded size limit")
             return data
     except HTTPError as exc:
@@ -127,8 +235,13 @@ def fetch_url_bytes(url: str, timeout_seconds: int, accept: str, max_bytes: int 
         raise RepositoryLoadError(f"GitHub web network error: {exc.reason}") from exc
 
 
-def fetch_url_text(url: str, timeout_seconds: int, accept: str = "text/html") -> str:
-    data = fetch_url_bytes(url, timeout_seconds, accept)
+def fetch_url_text(
+    url: str,
+    timeout_seconds: int,
+    accept: str = "text/html",
+    budget: ImportBudget | None = None,
+) -> str:
+    data = fetch_url_bytes(url, timeout_seconds, accept, budget=budget)
     for encoding in ("utf-8", "utf-8-sig", "gb18030", "cp936", "cp1252", "latin-1"):
         try:
             return data.decode(encoding)
@@ -335,87 +448,133 @@ def fetch_web_raw_file(owner: str, repo: str, branch: str, file_path: str, timeo
     return ParsedFile(file_path=file_path, content=content)
 
 
-def browse_github_repository_via_web(owner: str, repo: str, repository_id: str) -> list[ParsedFile]:
-    settings = get_settings()
-    timeout = settings.github_api_timeout_seconds
-    root_page = fetch_url_text(f"https://github.com/{owner}/{repo}", timeout)
-    default_branch = parse_default_branch_from_web_page(root_page, owner, repo)
-    files: list[ParsedFile] = []
-    total_bytes = 0
-    visited_dirs: set[str] = set()
-    pending_dirs: list[tuple[str, str]] = [("", root_page)]
+def browse_github_repository_via_web(
+    owner: str,
+    repo: str,
+    repository_id: str,
+    budget: ImportBudget | None = None,
+) -> list[ParsedFile]:
+    active_budget = _resolve_import_budget(budget) or ImportBudget.from_settings()
+    with activate_import_budget(active_budget):
+        settings = get_settings()
+        timeout = settings.github_api_timeout_seconds
+        default_branch: str | None = None
+        files: list[ParsedFile] = []
+        total_bytes = 0
+        visited_dirs: set[str] = set()
+        pending_dirs = [""]
 
-    while pending_dirs and len(files) < settings.max_repository_files:
-        directory_path, page = pending_dirs.pop()
-        if directory_path in visited_dirs:
-            continue
-        visited_dirs.add(directory_path)
-
-        for kind, file_path in parse_web_directory_entries(page, owner, repo, default_branch):
-            if kind == "tree":
-                if file_path in visited_dirs or should_skip_remote_dir(file_path):
-                    continue
-                tree_url = f"https://github.com/{owner}/{repo}/tree/{quote(default_branch, safe='')}/{quote(file_path, safe='/')}"
-                pending_dirs.append((file_path, fetch_url_text(tree_url, timeout)))
+        while pending_dirs and len(files) < settings.max_repository_files:
+            directory_path = pending_dirs.pop()
+            if directory_path in visited_dirs:
                 continue
+            active_budget.record_directory()
+            visited_dirs.add(directory_path)
 
+            if directory_path:
+                if default_branch is None:
+                    raise RepositoryLoadError("could not detect the GitHub default branch from the browser page")
+                page_url = (
+                    f"https://github.com/{owner}/{repo}/tree/"
+                    f"{quote(default_branch, safe='')}/{quote(directory_path, safe='/')}"
+                )
+            else:
+                page_url = f"https://github.com/{owner}/{repo}"
+            page = fetch_url_text(page_url, timeout)
+            if default_branch is None:
+                default_branch = parse_default_branch_from_web_page(page, owner, repo)
+
+            for kind, file_path in parse_web_directory_entries(page, owner, repo, default_branch):
+                if kind == "tree":
+                    if file_path in visited_dirs or should_skip_remote_dir(file_path):
+                        continue
+                    pending_dirs.append(file_path)
+                    continue
+
+                if len(files) >= settings.max_repository_files:
+                    break
+                if should_skip_remote_path(file_path):
+                    continue
+                parsed_file = fetch_web_raw_file(owner, repo, default_branch, file_path, timeout)
+                if parsed_file is None:
+                    continue
+                file_bytes = len(parsed_file.content.encode("utf-8", errors="ignore"))
+                if total_bytes + file_bytes > settings.max_repository_bytes:
+                    continue
+                files.append(parsed_file)
+                total_bytes += file_bytes
+
+        if not files:
+            raise RepositoryLoadError("no supported source files were found by GitHub browser traversal")
+
+        save_remote_repository_manifest(
+            repository_id,
+            f"https://github.com/{owner}/{repo}.git",
+            default_branch,
+            files,
+            total_bytes,
+            "github_web_browser",
+        )
+        return files
+
+
+def browse_github_repository(
+    github_url: str,
+    repository_id: str,
+    budget: ImportBudget | None = None,
+) -> list[ParsedFile]:
+    active_budget = _resolve_import_budget(budget) or ImportBudget.from_settings()
+    with activate_import_budget(active_budget):
+        settings = get_settings()
+        owner, repo = parse_github_owner_repo(github_url)
+        try:
+            default_branch = get_github_default_branch(owner, repo, settings.github_api_timeout_seconds)
+            tree = get_github_tree(owner, repo, default_branch, settings.github_api_timeout_seconds)
+        except RepositoryLoadError as exc:
+            if is_api_rate_limit_error(exc):
+                return browse_github_repository_via_web(owner, repo, repository_id)
+            raise
+
+        files: list[ParsedFile] = []
+        total_bytes = 0
+        active_budget.record_directory()
+        for entry in sorted(tree, key=lambda item: str(item.get("path", ""))):
+            active_budget.check_deadline()
+            if entry.get("type") == "tree":
+                directory_path = entry.get("path", "")
+                if isinstance(directory_path, str) and not should_skip_remote_dir(directory_path):
+                    active_budget.record_directory()
+                continue
+            if entry.get("type") != "blob":
+                continue
+            size = entry.get("size", 0)
+            if not isinstance(size, int):
+                continue
+            file_path = entry.get("path", "")
+            if not isinstance(file_path, str) or should_skip_remote_path(file_path):
+                continue
             if len(files) >= settings.max_repository_files:
                 break
-            if should_skip_remote_path(file_path):
+            if total_bytes + size > settings.max_repository_bytes:
                 continue
-            parsed_file = fetch_web_raw_file(owner, repo, default_branch, file_path, timeout)
+            parsed_file = fetch_remote_file(entry, settings.github_api_timeout_seconds)
             if parsed_file is None:
                 continue
-            file_bytes = len(parsed_file.content.encode("utf-8", errors="ignore"))
-            if total_bytes + file_bytes > settings.max_repository_bytes:
-                continue
             files.append(parsed_file)
-            total_bytes += file_bytes
+            total_bytes += size
 
-    if not files:
-        raise RepositoryLoadError("no supported source files were found by GitHub browser traversal")
+        if not files:
+            raise RepositoryLoadError("no supported source files were found by browser traversal")
 
-    save_remote_repository_manifest(repository_id, f"https://github.com/{owner}/{repo}.git", default_branch, files, total_bytes, "github_web_browser")
-    return files
-
-
-def browse_github_repository(github_url: str, repository_id: str) -> list[ParsedFile]:
-    settings = get_settings()
-    owner, repo = parse_github_owner_repo(github_url)
-    try:
-        default_branch = get_github_default_branch(owner, repo, settings.github_api_timeout_seconds)
-        tree = get_github_tree(owner, repo, default_branch, settings.github_api_timeout_seconds)
-    except RepositoryLoadError as exc:
-        if is_api_rate_limit_error(exc):
-            return browse_github_repository_via_web(owner, repo, repository_id)
-        raise
-
-    files: list[ParsedFile] = []
-    total_bytes = 0
-    for entry in sorted(tree, key=lambda item: str(item.get("path", ""))):
-        if entry.get("type") != "blob":
-            continue
-        size = entry.get("size", 0)
-        if not isinstance(size, int):
-            continue
-        file_path = entry.get("path", "")
-        if not isinstance(file_path, str) or should_skip_remote_path(file_path):
-            continue
-        if len(files) >= settings.max_repository_files:
-            break
-        if total_bytes + size > settings.max_repository_bytes:
-            continue
-        parsed_file = fetch_remote_file(entry, settings.github_api_timeout_seconds)
-        if parsed_file is None:
-            continue
-        files.append(parsed_file)
-        total_bytes += size
-
-    if not files:
-        raise RepositoryLoadError("no supported source files were found by browser traversal")
-
-    save_remote_repository_manifest(repository_id, github_url, default_branch, files, total_bytes, "github_api_browser")
-    return files
+        save_remote_repository_manifest(
+            repository_id,
+            github_url,
+            default_branch,
+            files,
+            total_bytes,
+            "github_api_browser",
+        )
+        return files
 
 
 def save_remote_repository_manifest(
@@ -481,10 +640,16 @@ def save_remote_analysis_snapshot(repository_id: str, files: list[ParsedFile]) -
     return snapshot_dir
 
 
-def load_repository(github_url: str):
-    normalized_url = validate_github_repo_url(github_url)
-    repository_id = generate_repository_id(normalized_url)
-    files = browse_github_repository(normalized_url, repository_id)
-    save_remote_analysis_snapshot(repository_id, files)
-    chunks = split_files_into_chunks(files, repository_id)
-    return repository_id, chunks, len(files)
+def load_repository(github_url: str, budget: ImportBudget | None = None):
+    active_budget = _resolve_import_budget(budget) or ImportBudget.from_settings()
+    with activate_import_budget(active_budget):
+        active_budget.check_deadline()
+        normalized_url = validate_github_repo_url(github_url)
+        repository_id = generate_repository_id(normalized_url)
+        files = browse_github_repository(normalized_url, repository_id)
+        active_budget.check_deadline()
+        save_remote_analysis_snapshot(repository_id, files)
+        active_budget.check_deadline()
+        chunks = split_files_into_chunks(files, repository_id)
+        active_budget.check_deadline()
+        return repository_id, chunks, len(files)
