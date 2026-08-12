@@ -25,15 +25,17 @@ dist/                     交付包目录，不提交
 ## 核心流程
 
 ```text
-GitHub URL
-  -> Repository Loader
-  -> File Parser
-  -> Symbol-level Chunks
-  -> Chroma Vector Store
-  -> Retriever / Reranker
-  -> LLM Answer Generator
-  -> Answer + Sources + Agent Logs
+默认联网问答：
+GitHub URL -> 安全远程读取 -> 内存切块 -> 内存 BM25/关键词检索
+  -> Reranker -> LLM/本地回退回答 -> 释放请求数据
+
+深度分析：
+GitHub URL 或 ZIP -> Repository Loader -> File Parser -> Symbol-level Chunks
+  -> 本地快照与 Chroma Vector Store -> Retriever / Reranker
+  -> LLM Answer Generator -> Answer + Sources + Agent Logs
 ```
+
+两条链路由独立 API 保证数据边界。`POST /chat/online` 没有客户端可控制的 `persist` 参数，并且不调用 `load_repository()`、Chroma 或索引 manifest；`POST /repository/load` 才负责持久化。联网模式仍会在请求期间把过滤后的源文件读入服务端内存，配置外部模型时还会发送最终选中的脱敏证据片段。
 
 ## 主要模块
 
@@ -43,6 +45,7 @@ GitHub URL
   - `GET /health`
   - `GET /repositories`
   - `POST /repository/load`
+  - `POST /chat/online`
   - `POST /chat`
   - `GET /repository/report/{repository_id}`
   - `POST /repository/generate-readme`
@@ -54,6 +57,10 @@ GitHub URL
   - 生成稳定 `repository_id`
   - 通过 GitHub API 远程遍历默认分支文件树
   - 按过滤规则读取受支持的远程文件内容并生成 chunks
+  - 通过 `persist_manifest=False` 提供不写远程 manifest 的请求级读取入口
+- `online_search.py`
+  - 组合临时 GitHub 读取、内存 BM25/关键词召回、RRF 融合和 rerank
+  - 不创建或查询 Chroma collection
 - `file_parser.py`
   - 多编码文本读取
   - PDF/DOCX/XLSX 可选读取
@@ -71,6 +78,7 @@ GitHub URL
 - `report_service.py`
   - 项目报告生成
   - README 草稿生成
+  - 模块依赖和 Python 函数调用关系整合
   - 分析结果 manifest 缓存
 
 ### Agents
@@ -96,6 +104,9 @@ GitHub URL
   - 识别 SQLAlchemy、Django ORM、Prisma、Mongoose。
 - `EntrypointAnalyzer`
   - 识别启动入口、应用入口、配置入口。
+- `CallGraphAnalyzer`
+  - 使用 Python AST 静态识别同文件、类方法和显式导入函数调用。
+  - 不导入、不执行被分析仓库代码；动态分派和运行时反射不做猜测。
 
 ## 运行时产物
 

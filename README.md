@@ -1,12 +1,13 @@
 # GitHub Code RAG
 
-可本地运行和容器部署的 GitHub 单仓库代码 RAG 问答应用。
+可本地运行和容器部署的 GitHub 代码问答应用，默认支持不建立本地索引的联网问答，也保留可重复使用的深度分析知识库。
 
 项目更新记录见：[UPDATE_README.md](./UPDATE_README.md)
 
 功能：
 
-- 输入 GitHub 仓库 URL 后通过 GitHub API 远程遍历项目文件树，不 clone、不下载完整 archive，仅保存经过安全过滤的文本分析快照
+- 默认“联网问答”：输入公开 GitHub 仓库 URL 后，在单次请求内临时读取、切块和检索，不 clone、不下载完整 archive，也不保存源码快照、manifest 或 Chroma 索引
+- 可选“深度分析”：显式导入后保存经过安全过滤的文本快照与向量索引，支持连续问答、报告和 README 生成
 - 读取常见代码和文档文件
 - 过滤依赖目录、构建产物、锁文件、二进制文件和 `.env`
 - 使用 LangChain 切分文本
@@ -16,6 +17,7 @@
 - 支持 Multi-query、HyDE、相邻 chunk 扩展、本地 reranker 二次排序和结构化来源引用
 - 支持 LangGraph 编排的 V2 Codebase Agent
 - 支持项目分析报告和 README 自动生成
+- 项目报告支持 Python 函数级调用关系，展示调用方、被调用函数、文件和行号
 - 支持 Agent 执行日志、耗时和缓存命中状态返回
 - 使用 DeepSeek Chat API 基于检索片段回答问题
 - 支持可选的单管理员登录、签名 Session Cookie、CSRF 防护和 API Key 自动化访问
@@ -40,11 +42,13 @@ github-code-rag/
 │  │  ├─ techstack_analyzer.py
 │  │  ├─ api_analyzer.py
 │  │  ├─ database_analyzer.py
-│  │  └─ entrypoint_analyzer.py
+│  │  ├─ entrypoint_analyzer.py
+│  │  └─ call_graph_analyzer.py
 │  ├─ graph/
 │  │  └─ workflow.py
 │  ├─ services/
 │  │  ├─ repo_loader.py
+│  │  ├─ online_search.py
 │  │  ├─ file_parser.py
 │  │  ├─ vector_store.py
 │  │  ├─ llm_service.py
@@ -140,12 +144,14 @@ GitHub 远程遍历相关配置：
 ```env
 GITHUB_API_TIMEOUT_SECONDS=30
 GITHUB_TOKEN=
+MAX_CONCURRENT_ONLINE_CHATS=1
 ```
 
 说明：
 
 - `GITHUB_API_TIMEOUT_SECONDS`：访问 GitHub API 的单次请求超时时间。
 - `GITHUB_TOKEN`：可选，只放在后端 `.env` 中，用于提高 GitHub API 限额；不要写进前端代码。
+- `MAX_CONCURRENT_ONLINE_CHATS`：同时执行的联网问答数量；默认 1，避免多个大仓库同时占用过多内存和 GitHub 请求配额。
 - 当前导入路径优先读取 GitHub API；如果匿名 API 被 403 限流，会自动回退到 GitHub 网页目录浏览 + raw 文件读取。
 - 两种路径都只读取默认分支的远程文件树和单文件内容，不执行 `git clone`，也不下载 zip/tar archive。
 - 通过过滤的文本文件会写入 `repos/<repository_id>/source_snapshot/`，供项目报告和 README analyzer 使用；`.env`、私钥、凭证、二进制和超大文件不会进入快照。
@@ -282,13 +288,15 @@ docker compose ps
 
 ## 产品工作台怎么使用
 
-页面按“导入 → 理解 → 交付”组织，新手不需要先阅读 API 文档：
+页面提供两个边界明确的模式，新手不需要先阅读 API 文档：
 
-1. 在左侧粘贴公开 GitHub 仓库地址并点击“导入”。页面会显示当前处理状态，后端只读取经过安全过滤的文本文件。
-2. 导入成功后，“最近项目”会保存项目入口。刷新浏览器只会在本地记住最后选择的 `repository_id`，不会保存密码、Session、CSRF token 或 API Key。
-3. 项目摘要展示文件数、代码片段数、默认分支和索引状态。可以直接提问，也可以生成项目报告或 README。
+1. 默认“联网问答”：粘贴公开 GitHub 仓库地址后直接提问。后端按安全过滤和资源预算读取有限文件，在内存中执行 BM25/关键词检索与排序；请求结束后不会留下源码快照、manifest 或 Chroma 集合。
+2. 需要多轮复用、项目报告、README 或调用图时，再手动切换到“深度分析”，点击“导入并建立索引”。只有这一步会把过滤后的快照和索引写入本机。
+3. 深度导入成功后，知识库列表会保存项目入口。浏览器只记住最后选择的 `repository_id`，不会保存联网仓库 URL、密码、Session、CSRF token 或 API Key。
 4. 报告和 README 可以复制或下载为 Markdown 文件。
-5. “删除项目”只删除本机的分析快照、manifest 和对应 Chroma 集合，不会修改 GitHub 原仓库。浏览器 Session 删除操作必须通过 CSRF 校验。
+5. “删除知识库”只删除本机的分析快照、manifest 和对应 Chroma 集合，不会修改 GitHub 原仓库。浏览器 Session 删除操作必须通过 CSRF 校验。
+
+联网模式的准确隐私边界是“不持久化源码和索引”，不是“完全不传输数据”：服务端仍需把通过过滤的源码字节临时读入请求内存；若配置了 DeepSeek，问题和最终选中的脱敏代码片段可能发送给该模型服务。需要处理私有或高度敏感代码时，应先评估 GitHub 与模型服务的数据政策，或保持 `DEEPSEEK_API_KEY` 为空使用本地回退回答。
 
 `GET /repositories` 为旧客户端保留 `repositories: string[]`，同时新增结构化 `items`；`GET /repositories/{repository_id}` 返回项目摘要，`DELETE /repositories/{repository_id}` 执行受控删除。响应中的 `owner_id` 当前固定为 `null`，只用于保留未来 SaaS 数据结构兼容性，**不表示当前已经实现多用户或租户隔离**。
 
@@ -331,7 +339,17 @@ curl.exe http://127.0.0.1:8000/health
 }
 ```
 
-### 2. 导入 GitHub 仓库
+### 2. 联网问答（默认，不建立本地索引）
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/chat/online `
+  -H "Content-Type: application/json" `
+  -d '{"github_url":"https://github.com/tiangolo/fastapi","question":"这个项目怎么启动？"}'
+```
+
+响应中的 `repository_saved` 固定为 `false`，并包含本次临时读取的文件数、切分片段数、来源和 Agent 日志。该接口不会调用持久化导入、Chroma 建库或知识库目录写入；请求失败时也不会留下半成品。
+
+### 3. 导入 GitHub 仓库（深度分析）
 
 ```powershell
 curl.exe -X POST http://127.0.0.1:8000/repository/load `
@@ -381,7 +399,7 @@ GitHub API 获取默认分支 -> GitHub API 递归读取文件树 -> GitHub API 
 GitHub 网页目录 -> 页面内嵌文件树数据 -> raw.githubusercontent.com 读取单个受支持文件 -> 安全文本快照 -> 切分 chunk -> 写入 Chroma
 ```
 
-### 3. 仓库问答
+### 4. 已导入知识库问答
 
 将上一步返回的 `repository_id` 填入请求：
 
@@ -391,7 +409,7 @@ curl.exe -X POST http://127.0.0.1:8000/chat `
   -d "{\"repository_id\":\"tiangolo-fastapi-a1b2c3d4e5\",\"question\":\"这个项目怎么启动？\"}"
 ```
 
-### 4. 检索调试
+### 5. 检索调试
 
 用于查看某个问题实际检索到了哪些片段、扩展了哪些 query、命中的行号和符号信息：
 
@@ -419,7 +437,7 @@ curl.exe -X POST http://127.0.0.1:8200/debug/retrieval `
 }
 ```
 
-### 5. 项目分析报告
+### 6. 项目分析报告
 
 ```powershell
 curl.exe http://127.0.0.1:8200/repository/report/你的repository_id
@@ -436,7 +454,7 @@ curl.exe http://127.0.0.1:8200/repository/report/你的repository_id
 - Database Analysis
 - Agent 执行日志
 
-### 6. README 自动生成
+### 7. README 自动生成
 
 ```powershell
 curl.exe -X POST http://127.0.0.1:8200/repository/generate-readme `

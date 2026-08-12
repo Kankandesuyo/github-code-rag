@@ -39,6 +39,11 @@ class RepositorySummary:
     updated_at: int | None
     github_url: str | None
     default_branch: str | None
+    source: str | None
+    source_name: str | None
+    source_type: str | None
+    display_name: str | None
+    upload_name: str | None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -98,6 +103,7 @@ class RepositoryCatalogService:
         repository_id = project_path.name
         manifest_dir = project_path / MANIFEST_DIR
         remote = self._read_json(manifest_dir / "remote_repository_manifest.json", repository_id) or {}
+        source_manifest = self._read_json(manifest_dir / "source_manifest.json", repository_id) or {}
         vector = self._read_json(manifest_dir / "vector_index_manifest.json", repository_id)
 
         try:
@@ -120,8 +126,31 @@ class RepositoryCatalogService:
         files = vector.get("files", {}) if vector else {}
         files_indexed = len(files) if isinstance(files, dict) else 0
         if not files_indexed:
-            files_indexed = int(remote.get("files_indexed", 0) or 0)
+            files_indexed = int(
+                source_manifest.get("files_indexed", remote.get("files_indexed", 0)) or 0
+            )
         chunks_indexed = int(vector.get("chunk_count", 0) or 0) if vector else 0
+        source = source_manifest.get("source")
+        if not isinstance(source, str) or not source:
+            source = remote.get("source") if isinstance(remote.get("source"), str) else None
+        if source is None and remote:
+            source = "github"
+        source_name = source_manifest.get("source_name")
+        if not isinstance(source_name, str) or not source_name:
+            source_name = None
+        source_type = source_manifest.get("source_type")
+        if not isinstance(source_type, str) or not source_type:
+            source_type = "zip_upload" if source == "zip_upload" else "github" if remote else source
+        display_name = source_manifest.get("display_name")
+        if not isinstance(display_name, str) or not display_name:
+            display_name = source_name
+        if display_name is None:
+            github_url = remote.get("github_url")
+            if isinstance(github_url, str) and github_url:
+                display_name = github_url.rstrip("/").rsplit("/", 1)[-1].removesuffix(".git")
+        upload_name = source_manifest.get("upload_name")
+        if not isinstance(upload_name, str) or not upload_name:
+            upload_name = source_name if source_type == "zip_upload" else None
 
         return RepositorySummary(
             repository_id=repository_id,
@@ -133,6 +162,11 @@ class RepositoryCatalogService:
             updated_at=updated_at,
             github_url=remote.get("github_url") if isinstance(remote.get("github_url"), str) else None,
             default_branch=remote.get("default_branch") if isinstance(remote.get("default_branch"), str) else None,
+            source=source,
+            source_name=source_name,
+            source_type=source_type,
+            display_name=display_name,
+            upload_name=upload_name,
         )
 
     def list_repositories(self) -> list[RepositorySummary]:

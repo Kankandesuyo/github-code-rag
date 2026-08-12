@@ -453,6 +453,8 @@ def browse_github_repository_via_web(
     repo: str,
     repository_id: str,
     budget: ImportBudget | None = None,
+    *,
+    persist_manifest: bool = True,
 ) -> list[ParsedFile]:
     active_budget = _resolve_import_budget(budget) or ImportBudget.from_settings()
     with activate_import_budget(active_budget):
@@ -507,14 +509,15 @@ def browse_github_repository_via_web(
         if not files:
             raise RepositoryLoadError("no supported source files were found by GitHub browser traversal")
 
-        save_remote_repository_manifest(
-            repository_id,
-            f"https://github.com/{owner}/{repo}.git",
-            default_branch,
-            files,
-            total_bytes,
-            "github_web_browser",
-        )
+        if persist_manifest:
+            save_remote_repository_manifest(
+                repository_id,
+                f"https://github.com/{owner}/{repo}.git",
+                default_branch,
+                files,
+                total_bytes,
+                "github_web_browser",
+            )
         return files
 
 
@@ -522,6 +525,8 @@ def browse_github_repository(
     github_url: str,
     repository_id: str,
     budget: ImportBudget | None = None,
+    *,
+    persist_manifest: bool = True,
 ) -> list[ParsedFile]:
     active_budget = _resolve_import_budget(budget) or ImportBudget.from_settings()
     with activate_import_budget(active_budget):
@@ -532,7 +537,13 @@ def browse_github_repository(
             tree = get_github_tree(owner, repo, default_branch, settings.github_api_timeout_seconds)
         except RepositoryLoadError as exc:
             if is_api_rate_limit_error(exc):
-                return browse_github_repository_via_web(owner, repo, repository_id)
+                return browse_github_repository_via_web(
+                    owner,
+                    repo,
+                    repository_id,
+                    budget=active_budget,
+                    persist_manifest=persist_manifest,
+                )
             raise
 
         files: list[ParsedFile] = []
@@ -566,14 +577,15 @@ def browse_github_repository(
         if not files:
             raise RepositoryLoadError("no supported source files were found by browser traversal")
 
-        save_remote_repository_manifest(
-            repository_id,
-            github_url,
-            default_branch,
-            files,
-            total_bytes,
-            "github_api_browser",
-        )
+        if persist_manifest:
+            save_remote_repository_manifest(
+                repository_id,
+                github_url,
+                default_branch,
+                files,
+                total_bytes,
+                "github_api_browser",
+            )
         return files
 
 
@@ -649,6 +661,26 @@ def load_repository(github_url: str, budget: ImportBudget | None = None):
         files = browse_github_repository(normalized_url, repository_id)
         active_budget.check_deadline()
         save_remote_analysis_snapshot(repository_id, files)
+        active_budget.check_deadline()
+        chunks = split_files_into_chunks(files, repository_id)
+        active_budget.check_deadline()
+        return repository_id, chunks, len(files)
+
+
+def load_repository_ephemeral(github_url: str, budget: ImportBudget | None = None):
+    """Read and chunk a GitHub repository without writing source or index data to disk."""
+
+    active_budget = _resolve_import_budget(budget) or ImportBudget.from_settings()
+    with activate_import_budget(active_budget):
+        active_budget.check_deadline()
+        normalized_url = validate_github_repo_url(github_url)
+        repository_id = generate_repository_id(normalized_url)
+        files = browse_github_repository(
+            normalized_url,
+            repository_id,
+            budget=active_budget,
+            persist_manifest=False,
+        )
         active_budget.check_deadline()
         chunks = split_files_into_chunks(files, repository_id)
         active_budget.check_deadline()

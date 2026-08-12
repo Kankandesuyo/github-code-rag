@@ -3125,3 +3125,53 @@ python scripts/run_pip_audit.py -> No known vulnerabilities found, 1 ignored
 Uvicorn 在 `127.0.0.1:8210` 实机启动成功，首页、静态资源、认证状态、仓库列表和聊天接口均返回 200。Playwright 完成页面加载、项目切换和真实提问，浏览器控制台为 0 errors / 0 warnings。现有 `repos/` 中多数目录属于旧版导入产物，缺少当前 catalog/index manifest，因此页面会明确显示“索引不完整”；为避免擅自删除本地数据，本轮保留这些目录，后续使用者可重新导入对应仓库生成新格式索引。
 
 Docker Compose 配置仍能通过解析，但本次 Docker Desktop 启动失败。诊断显示 BIOS 虚拟化已开启，而 Windows 当前 `HypervisorPresent=False`，WSL 提示需要启用虚拟机平台；查询或修改 Windows 可选功能需要管理员权限并可能要求重启。因此本轮没有声称容器镜像和健康检查已经重新通过。
+
+## 48. 2026-07-19 自主审核与 Python 函数调用图升级
+
+本轮先重新审核当前工作区，而不是沿用旧测试结论。项目虚拟环境下完整基线为 `147 passed, 1 skipped`；`compileall`、`pip check` 和前端 JavaScript 语法检查均通过。唯一跳过项仍是 Windows 目录软链接权限测试；测试入口必须使用 `.venv`，系统默认 Python 未安装本项目测试依赖。
+
+在已有“模块 import 依赖图”基础上，新增 `CallGraphAnalyzer`：
+
+- 通过 Python AST 识别同文件函数调用、`self`/`cls` 方法调用、显式导入函数调用和模块别名调用；
+- 报告返回 `function_call_analysis` 结构化字段，并新增 `Python Function Call Analysis` Markdown 章节；
+- 每条关系包含调用方文件与符号、被调用文件与符号、调用类型和源码行号；
+- 只做保守静态判断，不 import、不运行被分析仓库代码，也不猜测动态分派或反射结果；
+- manifest 版本升级到 v4，旧缓存会自动失效并重新分析。
+
+聚焦测试已覆盖跨文件函数调用进入结构化 API 和 Markdown 报告。对本项目自身运行分析器命中 240 条受结果上限保护的调用边，其中包括 `app/main.py` 到配置、鉴权和服务函数的真实关系。
+
+最终验证：
+
+```text
+.venv Python pytest tests -q -> 147 passed, 1 skipped, 1 warning
+python -m compileall -q app tests -> PASS
+python -m pip check -> No broken requirements found.
+node --check app/static/app.js -> PASS
+git diff --check -> PASS
+docker compose config --quiet -> PASS
+```
+
+Uvicorn 在 `127.0.0.1:8211` 实机启动后，`/health`、`/auth/status`、`/repositories` 和 `/openapi.json` 均返回 200；OpenAPI 已包含 `function_call_analysis`。验证结束后服务正常关闭。唯一 warning 是 FastAPI TestClient 提示未来切换到 `httpx2`，当前不影响测试结果；唯一 skipped 仍是 Windows 软链接权限边界测试。
+
+## 49. 2026-08-08 默认联网问答与双模式工作台
+
+新增默认“联网问答”模式：用户只需输入公开 GitHub 仓库 URL 和问题，后端在一次请求内安全读取有限文件、内存切块、BM25/关键词召回、RRF 融合和 rerank，然后返回回答、来源与 Agent 日志。该链路通过独立 `POST /chat/online` 实现，不调用本地快照保存、索引 manifest 或 Chroma，因此不会把联网仓库加入知识库。
+
+原有能力保留为显式“深度分析”模式。切换后才显示 ZIP、知识库、项目报告、README 和删除操作；只有点击“导入并建立索引”才会产生本地持久化数据。联网 URL 与模式不写入 `localStorage`，刷新后仍默认回到联网问答。
+
+安全边界同步收紧：GitHub API 正常路径和 403 网页 fallback 都传递 `persist_manifest=False`；URL 仍限定为 `https://github.com/{owner}/{repo}`；文件、字节、目录、外部请求和总时限预算继续生效；新增独立在线并发上限。准确承诺是“源码和索引不持久化”，服务端仍会在请求内存中临时处理过滤后的文件，配置模型服务时选中的脱敏片段可能发送给模型提供商。
+
+最终验证：
+
+```text
+在线模式聚焦测试 -> 7 passed
+完整 pytest -> 174 passed, 1 skipped, 1 warning
+pip check -> No broken requirements found
+node --check app/static/app.js -> PASS
+docker compose config --quiet -> PASS
+git diff --check -> PASS
+```
+
+真实联网请求使用公开仓库 `octocat/Hello-World`：`POST /chat/online` 返回 200、`repository_saved=false`、`Cache-Control=no-store`，读取 1 个文件/1 个片段并引用 `README`。调用前后 `repos/` 与 `chroma_db/` 的目录数、文件数、总字节和元数据 SHA-256 指纹完全一致，临时仓库也没有出现在 `GET /repositories` 中。
+
+Playwright 实际浏览器验收确认页面默认进入联网模式，回答、来源和 Agent 日志均能显示；切换到深度分析后才显示 ZIP、知识库、报告、README 与删除操作；`localStorage` 没有联网 URL 或模式数据，控制台为 0 errors / 0 warnings。

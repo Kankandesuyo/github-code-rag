@@ -494,3 +494,34 @@ SaaS 边界：结构化摘要包含 `owner_id=null` 作为未来数据模型兼�
 - `.playwright-cli/` 已加入忽略列表，浏览器实机验收产物不进入交付版本。
 
 容器复验边界：Docker Compose 配置解析通过，但当前 Windows hypervisor/WSL 虚拟机平台未就绪，Docker daemon 无法启动；该系统级问题需要管理员权限和可能的重启，不属于应用代码回归失败。
+
+# SEC-023：函数调用图静态分析与 Chroma 豁免复核
+
+记录时间：2026-07-19 +09:00
+
+状态：已完成。
+
+- 新增的 `CallGraphAnalyzer` 只使用 Python AST 读取语法树，不 import、不执行被分析仓库代码，不解析动态反射目标。
+- 函数调用结果限制为最多 240 条，避免超大仓库把报告响应和 manifest 无限制放大。
+- manifest 升级到 v4，防止旧缓存缺少新增安全分析字段却被误判为最新结果。
+- 重新核对 GitHub Advisory `GHSA-f4j7-r4q5-qw2c`：截至本次审核，`chromadb 1.0.0` 到 `1.5.9` 仍列为受影响，且没有 patched version；Chroma 最新稳定版仍为 `1.5.9`。
+- 当前应用仍只使用进程内 `PersistentClient`，没有暴露公告所述 `/api/v2/.../collections` 远端服务路径，因此继续保留精确、自动到期的 `PYSEC-2026-311` 豁免，截止日不变为 `2026-08-13`。
+
+禁止把该豁免扩展为通用忽略规则。上游发布修复版本、项目切换到远端 Chroma 服务，或开始接受外部 embedding function 配置时，必须立即重新评估并移除豁免。
+
+# SEC-024：联网问答不持久化边界
+
+记录时间：2026-08-08 +09:00
+
+状态：已完成。
+
+- 新增独立 `POST /chat/online`；服务端固定执行请求级临时读取，客户端不能通过 `persist` 参数改变数据策略。
+- GitHub API 和网页 fallback 均支持并强制 `persist_manifest=False`，在线链路不调用远程 manifest、`source_snapshot`、向量索引 manifest 或 Chroma collection。
+- 继续复用 GitHub HTTPS 域名白名单、凭证/query/fragment 拒绝、敏感路径过滤、文件/字节/目录/请求/墙钟预算和业务限流。
+- 使用独立 `MAX_CONCURRENT_ONLINE_CHATS` 信号量限制同时占用内存和 GitHub 配额的在线请求；失败路径会释放并发槽。
+- API 响应使用 `Cache-Control: no-store`，前端不把联网 URL 或联网模式写入 `localStorage`。
+- 未知异常只返回固定公共错误；日志只记录异常类型，不记录仓库 URL、问题、源码或上游错误正文。
+
+边界说明：这里的“不落盘”指本应用不持久化源码、manifest 和向量索引。为了搜索，过滤后的源码字节仍会临时进入服务端请求内存；如果启用 DeepSeek，最终选中的脱敏片段与问题可能发送给模型提供商。该模式也不是 GitHub 全库代码审计，结果受读取预算、支持文件类型和 GitHub 限流影响。
+
+验收证据：真实请求 `octocat/Hello-World` 前后，`repos/` 与 `chroma_db/` 的目录数、文件数、总字节及元数据 SHA-256 指纹完全一致，在线仓库未进入 catalog；完整回归为 `174 passed, 1 skipped, 1 warning`。

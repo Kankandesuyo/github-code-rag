@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 from app.analyzers.api_analyzer import APIAnalyzer
+from app.analyzers.call_graph_analyzer import CallGraphAnalyzer
 from app.analyzers.database_analyzer import DatabaseAnalyzer
 from app.analyzers.dependency_analyzer import DependencyAnalyzer
 from app.analyzers.entrypoint_analyzer import EntrypointAnalyzer
@@ -14,6 +15,7 @@ from app.schemas.report_schema import (
     ApiEndpoint,
     DatabaseFinding,
     EntrypointFinding,
+    FunctionCall,
     GenerateReadmeResponse,
     ModuleDependency,
     ProjectReportResponse,
@@ -122,6 +124,15 @@ class ReportService:
             duration_ms=round((time.perf_counter() - started) * 1000, 2),
         )
 
+    def timed_analyze_function_calls(self, repo_path: Path) -> tuple[list[FunctionCall], AgentLog]:
+        started = time.perf_counter()
+        calls = CallGraphAnalyzer(self.iter_text_files(repo_path)).analyze(repo_path)
+        return calls, AgentLog(
+            agent="CallGraphAnalyzer",
+            action="Detecting conservative Python function call relationships",
+            duration_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+
     def timed_detect_environment_variables(self, repo_path: Path) -> tuple[list[str], AgentLog]:
         started = time.perf_counter()
         variables: set[str] = set()
@@ -173,6 +184,7 @@ class ReportService:
         database_findings, database_log = self.timed_analyze_database(repo_path)
         entrypoints, entrypoint_log = self.timed_analyze_entrypoints(repo_path)
         dependencies, dependency_log = self.timed_analyze_dependencies(repo_path)
+        function_calls, call_graph_log = self.timed_analyze_function_calls(repo_path)
         env_vars, env_log = self.timed_detect_environment_variables(repo_path)
         deployment_methods, deployment_log = self.timed_detect_deployment_methods(repo_path)
         logs = [
@@ -183,6 +195,7 @@ class ReportService:
             database_log,
             entrypoint_log,
             dependency_log,
+            call_graph_log,
             env_log,
             deployment_log,
         ]
@@ -194,6 +207,7 @@ class ReportService:
             "database_findings": [finding.model_dump() for finding in database_findings],
             "entrypoints": [entrypoint.model_dump() for entrypoint in entrypoints],
             "dependencies": [dependency.model_dump() for dependency in dependencies],
+            "function_calls": [call.model_dump() for call in function_calls],
             "environment_variables": env_vars,
             "deployment_methods": deployment_methods,
             "analysis_logs": [log.model_dump() for log in logs],
@@ -219,7 +233,7 @@ class ReportService:
             ]
         return data, [*cache_logs, *analysis_logs]
 
-    def unpack_manifest(self, data: dict) -> tuple[RepositoryAnalysis, TechStackResult, list[str], list[ApiEndpoint], list[DatabaseFinding], list[EntrypointFinding], list[ModuleDependency], list[str], list[str]]:
+    def unpack_manifest(self, data: dict) -> tuple[RepositoryAnalysis, TechStackResult, list[str], list[ApiEndpoint], list[DatabaseFinding], list[EntrypointFinding], list[ModuleDependency], list[FunctionCall], list[str], list[str]]:
         return (
             RepositoryAnalysis.model_validate(data["repository"]),
             TechStackResult.model_validate(data["tech_stack"]),
@@ -228,6 +242,7 @@ class ReportService:
             [DatabaseFinding.model_validate(finding) for finding in data.get("database_findings", [])],
             [EntrypointFinding.model_validate(entrypoint) for entrypoint in data.get("entrypoints", [])],
             [ModuleDependency.model_validate(dependency) for dependency in data.get("dependencies", [])],
+            [FunctionCall.model_validate(call) for call in data.get("function_calls", [])],
             list(data.get("environment_variables", [])),
             list(data.get("deployment_methods", [])),
         )
@@ -235,7 +250,7 @@ class ReportService:
     def build_project_report(self, repository_id: str) -> ProjectReportResponse:
         _, supervisor_logs = self.workflow.supervisor.plan("report")
         data, manifest_logs = self.load_analysis_manifest(repository_id)
-        repository, tech_stack, startup_hints, api_endpoints, database_findings, entrypoints, dependencies, env_vars, deployment_methods = self.unpack_manifest(data)
+        repository, tech_stack, startup_hints, api_endpoints, database_findings, entrypoints, dependencies, function_calls, env_vars, deployment_methods = self.unpack_manifest(data)
         markdown, overview, startup_guide, writer_logs = self.workflow.writer_agent.write_report(
             repository_id=repository_id,
             repository=repository,
@@ -245,6 +260,7 @@ class ReportService:
             database_findings=database_findings,
             entrypoints=entrypoints,
             dependencies=dependencies,
+            function_calls=function_calls,
             environment_variables=env_vars,
             deployment_methods=deployment_methods,
         )
@@ -260,6 +276,7 @@ class ReportService:
             database_analysis=database_findings,
             entrypoint_analysis=entrypoints,
             dependency_analysis=dependencies,
+            function_call_analysis=function_calls,
             environment_variables=env_vars,
             deployment_method=deployment_methods,
             logs=[*supervisor_logs, *manifest_logs, *writer_logs],
@@ -268,7 +285,7 @@ class ReportService:
     def generate_readme(self, repository_id: str) -> GenerateReadmeResponse:
         _, supervisor_logs = self.workflow.supervisor.plan("readme")
         data, manifest_logs = self.load_analysis_manifest(repository_id)
-        repository, tech_stack, startup_hints, api_endpoints, _database_findings, _entrypoints, _dependencies, _env_vars, _deployment_methods = self.unpack_manifest(data)
+        repository, tech_stack, startup_hints, api_endpoints, _database_findings, _entrypoints, _dependencies, _function_calls, _env_vars, _deployment_methods = self.unpack_manifest(data)
         markdown, writer_logs = self.workflow.writer_agent.write_readme(
             repository_id=repository_id,
             repository=repository,

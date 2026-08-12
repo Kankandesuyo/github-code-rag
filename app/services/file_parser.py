@@ -2,6 +2,7 @@ import ast
 import re
 from dataclasses import dataclass
 from pathlib import Path
+import zipfile
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -105,6 +106,7 @@ LANGUAGE_BY_FILENAME = {
 
 TEXT_DECODINGS = ("utf-8", "utf-8-sig", "gb18030", "cp936", "cp1252", "latin-1")
 DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".xlsx"}
+SAFE_DOCUMENT_CONTAINER_COMPRESSION = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
 
 
 def looks_binary(data: bytes) -> bool:
@@ -134,6 +136,50 @@ def read_text_content(path: Path) -> str | None:
     return None
 
 
+def office_container_is_within_limits(path: Path) -> bool:
+    settings = get_settings()
+    try:
+        with zipfile.ZipFile(path, mode="r") as archive:
+            entries = archive.infolist()
+            if len(entries) > settings.max_document_container_files:
+                return False
+            total_uncompressed = 0
+            total_compressed = 0
+            for entry in entries:
+                if (
+                    entry.flag_bits & (0x1 | 0x20 | 0x40 | 0x2000)
+                    or entry.compress_type not in SAFE_DOCUMENT_CONTAINER_COMPRESSION
+                    or entry.file_size < 0
+                    or entry.compress_size < 0
+                ):
+                    return False
+                if entry.is_dir():
+                    continue
+                total_uncompressed += entry.file_size
+                total_compressed += entry.compress_size
+                if total_uncompressed > settings.max_document_uncompressed_bytes:
+                    return False
+                if entry.file_size:
+                    if entry.compress_size <= 0:
+                        return False
+                    if (
+                        entry.file_size / entry.compress_size
+                        > settings.max_document_compression_ratio
+                    ):
+                        return False
+            if total_uncompressed:
+                if total_compressed <= 0:
+                    return False
+                if (
+                    total_uncompressed / total_compressed
+                    > settings.max_document_compression_ratio
+                ):
+                    return False
+    except (OSError, RuntimeError, zipfile.BadZipFile, zipfile.LargeZipFile):
+        return False
+    return True
+
+
 def read_pdf_content(path: Path) -> str | None:
     try:
         from pypdf import PdfReader
@@ -142,7 +188,17 @@ def read_pdf_content(path: Path) -> str | None:
 
     try:
         reader = PdfReader(str(path))
-        pages = [page.extract_text() or "" for page in reader.pages]
+        settings = get_settings()
+        if len(reader.pages) > settings.max_document_pages:
+            return None
+        pages: list[str] = []
+        extracted_characters = 0
+        for page in reader.pages:
+            content = page.extract_text() or ""
+            extracted_characters += len(content)
+            if extracted_characters > settings.max_document_extracted_characters:
+                return None
+            pages.append(content)
     except Exception:
         return None
     return "\n\n".join(page.strip() for page in pages if page.strip()) or None
@@ -154,15 +210,32 @@ def read_docx_content(path: Path) -> str | None:
     except ImportError:
         return None
 
+    if not office_container_is_within_limits(path):
+        return None
+
     try:
+        settings = get_settings()
         document = Document(str(path))
-        paragraphs = [paragraph.text.strip() for paragraph in document.paragraphs if paragraph.text.strip()]
+        extracted_characters = 0
+        paragraphs: list[str] = []
+        for paragraph in document.paragraphs:
+            content = paragraph.text.strip()
+            if not content:
+                continue
+            extracted_characters += len(content)
+            if extracted_characters > settings.max_document_extracted_characters:
+                return None
+            paragraphs.append(content)
         table_rows: list[str] = []
         for table in document.tables:
             for row in table.rows:
                 cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
                 if cells:
-                    table_rows.append(" | ".join(cells))
+                    content = " | ".join(cells)
+                    extracted_characters += len(content)
+                    if extracted_characters > settings.max_document_extracted_characters:
+                        return None
+                    table_rows.append(content)
     except Exception:
         return None
     return "\n".join(paragraphs + table_rows).strip() or None
@@ -174,20 +247,43 @@ def read_xlsx_content(path: Path) -> str | None:
     except ImportError:
         return None
 
+    if not office_container_is_within_limits(path):
+        return None
+
+    workbook = None
     try:
+        settings = get_settings()
         workbook = load_workbook(str(path), read_only=True, data_only=True)
+        if len(workbook.worksheets) > settings.max_document_sheets:
+            return None
         sections: list[str] = []
+        total_rows = 0
+        total_cells = 0
+        extracted_characters = 0
         for sheet in workbook.worksheets:
             rows: list[str] = [f"# Sheet: {sheet.title}"]
             for row in sheet.iter_rows(values_only=True):
+                total_rows += 1
+                total_cells += len(row)
+                if (
+                    total_rows > settings.max_document_rows
+                    or total_cells > settings.max_document_cells
+                ):
+                    return None
                 values = [str(value).strip() for value in row if value is not None and str(value).strip()]
                 if values:
-                    rows.append(" | ".join(values))
+                    content = " | ".join(values)
+                    extracted_characters += len(content)
+                    if extracted_characters > settings.max_document_extracted_characters:
+                        return None
+                    rows.append(content)
             if len(rows) > 1:
                 sections.append("\n".join(rows))
-        workbook.close()
     except Exception:
         return None
+    finally:
+        if workbook is not None:
+            workbook.close()
     return "\n\n".join(sections).strip() or None
 
 

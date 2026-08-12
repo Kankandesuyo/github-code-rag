@@ -7,7 +7,7 @@ from app.agents.repository_agent import RepositoryAgent
 from app.schemas.report_schema import AgentLog
 
 
-MANIFEST_VERSION = 3
+MANIFEST_VERSION = 4
 MANIFEST_DIR_NAME = ".codebase_agent"
 MANIFEST_FILE_NAME = "repository_manifest.json"
 

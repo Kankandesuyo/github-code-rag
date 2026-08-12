@@ -1,10 +1,13 @@
-from pydantic import BaseModel, Field, HttpUrl
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from app.schemas.report_schema import (
     AgentLog,
     ApiEndpoint,
     DatabaseFinding,
     EntrypointFinding,
+    FunctionCall,
     GenerateReadmeRequest,
     GenerateReadmeResponse,
     ModuleDependency,
@@ -44,6 +47,11 @@ class RepositorySummaryResponse(BaseModel):
     updated_at: int | None = None
     github_url: str | None = None
     default_branch: str | None = None
+    source: str | None = None
+    source_name: str | None = None
+    source_type: str | None = None
+    display_name: str | None = None
+    upload_name: str | None = None
 
 
 class RepositoryListResponse(BaseModel):
@@ -62,6 +70,13 @@ class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=4000)
 
 
+class OnlineChatRequest(BaseModel):
+    github_url: HttpUrl = Field(..., max_length=300)
+    question: str = Field(..., min_length=1, max_length=4000)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class Source(BaseModel):
     file_path: str
     chunk_id: int
@@ -77,3 +92,11 @@ class ChatResponse(BaseModel):
     answer: str
     sources: list[Source]
     logs: list[AgentLog] = Field(default_factory=list)
+
+
+class OnlineChatResponse(ChatResponse):
+    mode: Literal["online"] = "online"
+    repository_saved: Literal[False] = False
+    repository_id: str
+    files_scanned: int
+    chunks_scanned: int

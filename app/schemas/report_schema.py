@@ -66,6 +66,15 @@ class ModuleDependency(BaseModel):
     line: int
 
 
+class FunctionCall(BaseModel):
+    caller_file: str
+    caller_symbol: str
+    callee_file: str
+    callee_symbol: str
+    call_type: str
+    line: int
+
+
 class ProjectReportResponse(BaseModel):
     repository_id: str
     markdown: str
@@ -78,6 +87,7 @@ class ProjectReportResponse(BaseModel):
     database_analysis: list[DatabaseFinding]
     entrypoint_analysis: list[EntrypointFinding] = Field(default_factory=list)
     dependency_analysis: list[ModuleDependency] = Field(default_factory=list)
+    function_call_analysis: list[FunctionCall] = Field(default_factory=list)
     environment_variables: list[str] = Field(default_factory=list)
     deployment_method: list[str] = Field(default_factory=list)
     logs: list[AgentLog]

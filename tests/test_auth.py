@@ -140,7 +140,7 @@ def test_frontend_uses_session_login_without_local_storage_secrets():
     assert "localStorage.setItem(\"token" not in script_content
     assert 'requestJson("/auth/status"' in script_content
     assert 'fetch("/auth/login"' in script_content
-    assert 'fetch("/auth/logout"' in script_content
+    assert 'requestJson("/auth/logout"' in script_content
 
 
 def test_frontend_exposes_complete_beginner_workspace_contract():
@@ -148,7 +148,8 @@ def test_frontend_exposes_complete_beginner_workspace_contract():
     script_content = Path("app/static/app.js").read_text(encoding="utf-8")
 
     assert 'name="viewport"' in html_content
-    assert "读懂陌生代码库，从一次导入开始" in html_content
+    assert "Code RAG Studio" in html_content
+    assert "多来源代码与文档知识库" in html_content
     assert 'id="onboardingSteps"' in html_content
     assert 'id="projectSummary"' in html_content
     assert 'id="importProgress"' in html_content
@@ -163,6 +164,32 @@ def test_frontend_exposes_complete_beginner_workspace_contract():
     assert "status === 429" in script_content
     assert 'if (state.repositories.length === 0) {\n    state.activeRepositoryId = "";' in script_content
     assert 'localStorage.removeItem("activeRepositoryId")' in script_content
+
+
+def test_frontend_exposes_real_zip_import_and_responsive_source_drawer():
+    html_content = Path("app/static/index.html").read_text(encoding="utf-8")
+    script_content = Path("app/static/app.js").read_text(encoding="utf-8")
+
+    for control_id in (
+        "githubSourceTab",
+        "zipSourceTab",
+        "zipFileInput",
+        "zipDropzone",
+        "zipFileName",
+        "uploadZipButton",
+        "sidebarToggle",
+        "sidebarCloseButton",
+        "sidebarBackdrop",
+    ):
+        assert f'id="{control_id}"' in html_content
+
+    assert 'data-source-tab="github"' in html_content
+    assert 'data-source-tab="zip"' in html_content
+    assert 'accept=".zip,application/zip"' in html_content
+    assert 'requestJson("/repository/upload-zip"' in script_content
+    assert '"X-Archive-Name": encodeURIComponent(file.name)' in script_content
+    assert 'getApiHeaders(' in script_content
+    assert 'document.body.classList.toggle("sidebar-open", isOpen)' in script_content
 
 
 def test_frontend_supports_report_copy_and_markdown_download():

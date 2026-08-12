@@ -5,6 +5,7 @@ from app.schemas.report_schema import (
     ApiEndpoint,
     DatabaseFinding,
     EntrypointFinding,
+    FunctionCall,
     ModuleDependency,
     RepositoryAnalysis,
     TechStackResult,
@@ -83,6 +84,16 @@ class WriterAgent:
             return "No explicit environment variables were detected from env files, README, or compose files."
         return "\n".join(f"- `{variable}`" for variable in variables)
 
+    def write_function_call_analysis(self, calls: list[FunctionCall]) -> str:
+        if not calls:
+            return "No statically resolvable Python function calls were detected."
+        return "\n".join(
+            f"- `{call.caller_file}:{call.caller_symbol}` -> "
+            f"`{call.callee_file}:{call.callee_symbol}` via {call.call_type} "
+            f"({call.caller_file}:{call.line})"
+            for call in calls[:80]
+        )
+
     def write_deployment_method(self, methods: list[str]) -> str:
         if not methods:
             return "No explicit deployment method was detected."
@@ -99,12 +110,14 @@ class WriterAgent:
         database_findings: list[DatabaseFinding],
         entrypoints: list[EntrypointFinding] | None = None,
         dependencies: list[ModuleDependency] | None = None,
+        function_calls: list[FunctionCall] | None = None,
         environment_variables: list[str] | None = None,
         deployment_methods: list[str] | None = None,
     ) -> tuple[str, str, str, list[AgentLog]]:
         started = time.perf_counter()
         entrypoints = entrypoints or []
         dependencies = dependencies or []
+        function_calls = function_calls or []
         environment_variables = environment_variables or []
         deployment_methods = deployment_methods or []
         overview = self.write_project_overview(repository_id, repository, tech_stack)
@@ -113,6 +126,7 @@ class WriterAgent:
         database_analysis = self.write_database_analysis(database_findings)
         entrypoint_analysis = self.write_entrypoint_analysis(entrypoints)
         dependency_analysis = self.write_dependency_analysis(dependencies)
+        function_call_analysis = self.write_function_call_analysis(function_calls)
         environment_analysis = self.write_environment_variables(environment_variables)
         deployment_analysis = self.write_deployment_method(deployment_methods)
         core_modules = "\n".join(
@@ -131,6 +145,7 @@ class WriterAgent:
                 "# Database Analysis\n\n" + database_analysis,
                 "# Entrypoint Analysis\n\n" + entrypoint_analysis,
                 "# Module Dependency Analysis\n\n" + dependency_analysis,
+                "# Python Function Call Analysis\n\n" + function_call_analysis,
                 "# Environment Variables\n\n" + environment_analysis,
                 "# Deployment Method\n\n" + deployment_analysis,
             ]

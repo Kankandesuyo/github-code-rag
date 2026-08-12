@@ -1,10 +1,12 @@
 from pathlib import Path
 from collections import deque
 from contextlib import asynccontextmanager
+import asyncio
 import hashlib
 import logging
 import re
 import secrets
+from tempfile import TemporaryDirectory
 from threading import BoundedSemaphore, Lock
 import time
 from typing import Annotated
@@ -13,7 +15,9 @@ from urllib.parse import urlsplit, urlunsplit
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.requests import ClientDisconnect
 
 from app.agents.rag_agent import RAGAgent
 from app.config import get_settings
@@ -40,6 +44,8 @@ from app.schemas import (
     GenerateReadmeRequest,
     GenerateReadmeResponse,
     HealthResponse,
+    OnlineChatRequest,
+    OnlineChatResponse,
     ProjectReportResponse,
     RepositoryDeleteResponse,
     RepositoryListResponse,
@@ -54,6 +60,14 @@ from app.services.llm_service import (
     build_retrieval_queries,
     redact_sensitive_text,
     rerank_chunks,
+)
+from app.services.online_search import search_online_repository
+from app.services.archive_loader import (
+    ArchiveImportError,
+    ArchiveImportErrorCode,
+    decode_archive_name,
+    load_zip_repository,
+    validate_archive_content_type,
 )
 from app.services.report_service import ReportService
 from app.services.repo_loader import (
@@ -98,6 +112,7 @@ REPOSITORY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,140}$")
 _rate_limit_lock = Lock()
 _rate_limit_buckets: dict[str, deque[float]] = {}
 _repository_import_slots = BoundedSemaphore(get_settings().max_concurrent_imports)
+_online_chat_slots = BoundedSemaphore(get_settings().max_concurrent_online_chats)
 SAFE_REPOSITORY_IMPORT_DETAILS = frozenset(
     {
         "repository import deadline exceeded",
@@ -232,6 +247,86 @@ def public_repository_import_detail(exc: RepositoryLoadError) -> str:
     if detail in SAFE_REPOSITORY_IMPORT_DETAILS:
         return detail
     return "repository import failed"
+
+
+async def stream_zip_request_to_file(
+    request: Request,
+    destination: Path,
+    max_upload_bytes: int,
+    budget: ImportBudget,
+) -> tuple[int, str]:
+    raw_content_length = request.headers.get("content-length")
+    if raw_content_length:
+        try:
+            content_length = int(raw_content_length)
+        except ValueError as exc:
+            raise ArchiveImportError(
+                ArchiveImportErrorCode.INVALID_CONTENT_LENGTH
+            ) from exc
+        if content_length < 0:
+            raise ArchiveImportError(ArchiveImportErrorCode.INVALID_CONTENT_LENGTH)
+        if content_length > max_upload_bytes:
+            raise ArchiveImportError(ArchiveImportErrorCode.UPLOAD_TOO_LARGE)
+
+    total_bytes = 0
+    digest = hashlib.sha256()
+    try:
+        with destination.open("xb") as handle:
+            async with asyncio.timeout(budget.remaining_seconds()):
+                async for chunk in request.stream():
+                    if not chunk:
+                        continue
+                    total_bytes += len(chunk)
+                    if total_bytes > max_upload_bytes:
+                        raise ArchiveImportError(
+                            ArchiveImportErrorCode.UPLOAD_TOO_LARGE
+                        )
+                    digest.update(chunk)
+                    handle.write(chunk)
+                    budget.check_deadline()
+    except ArchiveImportError:
+        raise
+    except TimeoutError as exc:
+        raise ArchiveImportError(ArchiveImportErrorCode.UPLOAD_TIMEOUT) from exc
+    except ClientDisconnect as exc:
+        raise ArchiveImportError(ArchiveImportErrorCode.UPLOAD_INTERRUPTED) from exc
+    except OSError as exc:
+        raise ArchiveImportError(ArchiveImportErrorCode.STORAGE_FAILURE) from exc
+
+    if total_bytes == 0:
+        raise ArchiveImportError(ArchiveImportErrorCode.EMPTY_UPLOAD)
+    return total_bytes, digest.hexdigest()
+
+
+def process_zip_import(
+    archive_path: Path,
+    archive_name: str,
+    content_digest: str,
+    upload_size: int,
+    budget: ImportBudget,
+) -> RepositoryLoadResponse:
+    with activate_import_budget(budget):
+        budget.check_deadline()
+        repository_id, chunks, files_indexed = load_zip_repository(
+            archive_path,
+            archive_name,
+            content_digest,
+            upload_size=upload_size,
+            budget=budget,
+        )
+        budget.check_deadline()
+        index_result = index_chunks_incremental(repository_id, chunks)
+        budget.check_deadline()
+    return RepositoryLoadResponse(
+        repository_id=repository_id,
+        message="repository loaded successfully",
+        files_indexed=files_indexed,
+        chunks_indexed=index_result.chunks_indexed,
+        chunks_written=index_result.chunks_written,
+        index_cached=index_result.index_cached,
+        changed_files_count=index_result.changed_files_count,
+        removed_files_count=index_result.removed_files_count,
+    )
 
 
 @app.get("/", include_in_schema=False)
@@ -417,6 +512,162 @@ def repository_load(request: RepositoryLoadRequest, http_request: Request) -> Re
         _repository_import_slots.release()
 
 
+@app.post(
+    "/repository/upload-zip",
+    response_model=RepositoryLoadResponse,
+    dependencies=[Depends(require_api_key), Depends(enforce_rate_limit)],
+)
+async def repository_upload_zip(
+    request: Request,
+    x_archive_name: Annotated[
+        str | None,
+        Header(alias="X-Archive-Name", max_length=1024),
+    ] = None,
+) -> RepositoryLoadResponse:
+    if not _repository_import_slots.acquire(blocking=False):
+        write_security_audit("repository_import", "failure", request=request)
+        raise HTTPException(status_code=429, detail="repository import capacity reached")
+
+    try:
+        try:
+            settings = get_settings()
+            validate_archive_content_type(request.headers.get("content-type"))
+            archive_name = decode_archive_name(x_archive_name, settings)
+            budget = ImportBudget.from_settings()
+            with TemporaryDirectory(
+                prefix=".zip-upload-",
+                dir=settings.repos_dir,
+            ) as temporary_directory:
+                archive_path = Path(temporary_directory) / "upload.zip"
+                upload_size, content_digest = await stream_zip_request_to_file(
+                    request,
+                    archive_path,
+                    settings.max_archive_upload_bytes,
+                    budget,
+                )
+                response = await run_in_threadpool(
+                    process_zip_import,
+                    archive_path,
+                    archive_name,
+                    content_digest,
+                    upload_size,
+                    budget,
+                )
+        except ArchiveImportError as exc:
+            write_security_audit("repository_import", "failure", request=request)
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.public_detail,
+            ) from exc
+        except RepositoryLoadError as exc:
+            write_security_audit("repository_import", "failure", request=request)
+            raise HTTPException(
+                status_code=400,
+                detail=public_repository_import_detail(exc),
+            ) from exc
+        except VectorStoreError as exc:
+            write_security_audit("repository_import", "failure", request=request)
+            raise HTTPException(
+                status_code=500,
+                detail="vector store operation failed",
+            ) from exc
+        except Exception as exc:
+            logger.error("ZIP repository import failed error_type=%s", type(exc).__name__)
+            write_security_audit("repository_import", "failure", request=request)
+            raise HTTPException(status_code=500, detail="ZIP import failed") from exc
+
+        write_security_audit(
+            "repository_import",
+            "success",
+            request=request,
+            repository_id=response.repository_id,
+        )
+        return response
+    finally:
+        _repository_import_slots.release()
+
+
+def build_chat_sources(chunks: list[dict]) -> list[Source]:
+    seen: set[tuple[str, int]] = set()
+    sources: list[Source] = []
+    for chunk in chunks:
+        metadata = chunk["metadata"]
+        key = (metadata["file_path"], int(metadata["chunk_index"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        sources.append(
+            Source(
+                file_path=key[0],
+                chunk_id=key[1],
+                chunk_index=key[1],
+                start_line=metadata.get("start_line"),
+                end_line=metadata.get("end_line"),
+                language=metadata.get("language"),
+                symbol_name=metadata.get("symbol_name"),
+                symbol_type=metadata.get("symbol_type"),
+            )
+        )
+    return sources
+
+
+@app.post(
+    "/chat/online",
+    response_model=OnlineChatResponse,
+    dependencies=[Depends(require_api_key), Depends(enforce_rate_limit)],
+)
+def chat_online(request: OnlineChatRequest) -> OnlineChatResponse:
+    if not _online_chat_slots.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="online search capacity reached")
+
+    try:
+        budget = ImportBudget.from_settings()
+        result = search_online_repository(
+            str(request.github_url),
+            request.question,
+            budget=budget,
+        )
+        chunks = result.chunks
+        logs = list(result.logs)
+        if not chunks:
+            return OnlineChatResponse(
+                answer="无法从联网读取的仓库内容中找到可靠依据。",
+                sources=[],
+                logs=logs,
+                repository_id=result.repository_id,
+                files_scanned=result.files_scanned,
+                chunks_scanned=result.chunks_scanned,
+            )
+
+        writer_started = time.perf_counter()
+        answer = answer_question(request.question, chunks)
+        budget.check_deadline()
+        logs.append(
+            AgentLog(
+                agent="AnswerGenerator",
+                action="Generating grounded response from temporary evidence",
+                duration_ms=round((time.perf_counter() - writer_started) * 1000, 2),
+            )
+        )
+        return OnlineChatResponse(
+            answer=answer,
+            sources=build_chat_sources(chunks),
+            logs=logs,
+            repository_id=result.repository_id,
+            files_scanned=result.files_scanned,
+            chunks_scanned=result.chunks_scanned,
+        )
+    except RepositoryLoadError as exc:
+        raise HTTPException(status_code=400, detail=public_repository_import_detail(exc)) from exc
+    except LLMServiceError as exc:
+        raise HTTPException(status_code=500, detail="answer generation failed") from exc
+    except Exception as exc:
+        logger.error("online repository question failed error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="online repository question failed") from exc
+    finally:
+        _online_chat_slots.release()
+
+
 @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key), Depends(enforce_rate_limit)])
 def chat(request: ChatRequest) -> ChatResponse:
     try:
@@ -443,28 +694,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         logger.error("code question failed repository_id=%s error_type=%s", request.repository_id, type(exc).__name__)
         raise HTTPException(status_code=500, detail="code question failed") from exc
 
-    seen: set[tuple[str, int]] = set()
-    sources: list[Source] = []
-    for chunk in chunks:
-        metadata = chunk["metadata"]
-        key = (metadata["file_path"], int(metadata["chunk_index"]))
-        if key in seen:
-            continue
-        seen.add(key)
-        sources.append(
-            Source(
-                file_path=key[0],
-                chunk_id=key[1],
-                chunk_index=key[1],
-                start_line=metadata.get("start_line"),
-                end_line=metadata.get("end_line"),
-                language=metadata.get("language"),
-                symbol_name=metadata.get("symbol_name"),
-                symbol_type=metadata.get("symbol_type"),
-            )
-        )
-
-    return ChatResponse(answer=answer, sources=sources, logs=logs)
+    return ChatResponse(answer=answer, sources=build_chat_sources(chunks), logs=logs)
 
 
 @app.get(

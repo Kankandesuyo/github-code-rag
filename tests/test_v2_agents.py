@@ -31,7 +31,7 @@ def make_demo_repo(root: Path) -> str:
                 "app = FastAPI()",
                 "@app.get('/health')",
                 "def health():",
-                "    return {'status': 'ok'}",
+                "    return {'status': normalize_name(' ok ')}",
                 "class User(Base):",
                 "    id = Column(Integer, primary_key=True)",
                 "    name = Column(String)",
@@ -208,6 +208,13 @@ def test_report_service_manifest_cache(tmp_path, monkeypatch):
     dependency_edges = {(item.source_file, item.resolved_target) for item in first.dependency_analysis}
     assert ("app/main.py", "app/utils.py") in dependency_edges
     assert ("frontend/server.js", "frontend/routes.js") in dependency_edges
+    function_edges = {
+        (item.caller_file, item.caller_symbol, item.callee_file, item.callee_symbol)
+        for item in first.function_call_analysis
+    }
+    assert ("app/main.py", "health", "app/utils.py", "normalize_name") in function_edges
+    assert "# Python Function Call Analysis" in first.markdown
+    assert any(log.agent == "CallGraphAnalyzer" for log in first.logs)
     assert any(log.agent == "DependencyAnalyzer" for log in first.logs)
     database_details = {(item.technology, item.detail) for item in first.database_analysis}
     assert ("SQLAlchemy", "model User") in database_details
