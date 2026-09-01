@@ -76,6 +76,17 @@ def test_github_actions_are_pinned_to_immutable_commits():
     assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in action_refs)
 
 
+def test_static_demo_keeps_user_content_safe_and_sources_traceable():
+    demo = read("demo/index.html")
+
+    assert "p.textContent=text" in demo
+    assert 'maxlength="500"' in demo
+    assert 'rel="noopener noreferrer"' in demo
+    assert "load_repository_ephemeral" in demo
+    assert "app/services/online_search.py#L89-L124" in demo
+    assert "<script src=" not in demo
+
+
 def test_default_pytest_command_does_not_scan_imported_repositories():
     pytest_config = read("pytest.ini")
 
