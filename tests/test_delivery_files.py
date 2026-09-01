@@ -66,6 +66,16 @@ def test_ci_uses_python_312_and_runs_required_checks():
     assert "ruff==" in dev_requirements
 
 
+def test_github_actions_are_pinned_to_immutable_commits():
+    workflows = "\n".join(
+        read(path) for path in (".github/workflows/ci.yml", ".github/workflows/pages.yml")
+    )
+    action_refs = re.findall(r"uses:\s+[^@\s]+@([^\s#]+)", workflows)
+
+    assert action_refs
+    assert all(re.fullmatch(r"[0-9a-f]{40}", ref) for ref in action_refs)
+
+
 def test_default_pytest_command_does_not_scan_imported_repositories():
     pytest_config = read("pytest.ini")
 

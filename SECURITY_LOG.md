@@ -540,3 +540,4 @@ SaaS 边界：结构化摘要包含 `owner_id=null` 作为未来数据模型兼�
 - `GitPython` 从 `3.1.50` 升级至 `3.1.61`，覆盖本轮 audit 给出的全部 GitPython 修复版本要求。
 - CI 新增固定版本的 Ruff 核心正确性规则与 `80%` 应用覆盖率门禁；开发工具与生产依赖通过 `requirements-dev.txt` 分离。
 - 问答来源 URL 只由后端从已验证的 GitHub 仓库地址、受过滤文件路径和行号构造；前端只把 `https://github.com/` 地址渲染为新标签页链接，并设置 `rel=noreferrer`。
+- GitHub Actions 升级到 Node 24 对应的 `checkout v5` 与 `setup-python v6`，并将 CI、Pages 使用的所有 Action 固定到完整提交 SHA，降低可变标签被替换带来的供应链风险。

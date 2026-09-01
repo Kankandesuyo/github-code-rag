@@ -3184,3 +3184,4 @@ Playwright 实际浏览器验收确认页面默认进入联网模式，回答、
 - `GitPython` 从 `3.1.50` 升级到 `3.1.61`，消除本轮 audit 报告的 15 条可修复公告。
 - 新增 `requirements-dev.txt`，CI 固定 Ruff、pytest-cov 与 pip-audit 版本；启用 Ruff 核心正确性规则和应用覆盖率不低于 80% 的门禁。
 - GitHub 问答来源新增由后端安全构造的文件/行号 URL，前端只把可信 `https://github.com/` 地址渲染为新标签页链接；ZIP 来源保持不可点击。
+- 远端首次 CI 成功后仍出现 Node 20 弃用提示，因此将 `checkout` 升级到 v5、`setup-python` 升级到 v6，并把 CI 与 Pages 的全部 Action 固定到完整提交 SHA。
