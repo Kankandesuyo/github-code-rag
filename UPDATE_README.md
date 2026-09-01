@@ -3100,7 +3100,7 @@ Docker 当前补充检查：Docker daemon 29.6.1 可用，`docker compose config
 
 供应链实测先发现 12 个包的 59 条漏洞记录。兼容升级 FastAPI/Starlette、GitPython、LangChain/LangGraph、Chroma、Sentence Transformers/Transformers 和 pytest 后，`120 passed, 1 skipped`；二次扫描仅剩 `chromadb 1.5.9 / PYSEC-2026-311`。
 
-该记录对应 `CVE-2026-45829`（CVSS 9.3）。当前应用只使用 `PersistentClient`，不暴露 Chroma FastAPI `/api/v2`、不使用 `HttpClient`，集合创建/获取始终显式传入自有 `embedding_function`，所以公告中的远端恶意模型加载路径不可达。CI gate 只允许这一项精准豁免并在 `2026-08-13` 到期；届时自动移除豁免并失败关闭。Chroma 发布修复版本，或项目引入远端 Chroma 服务、外部集合配置时，都必须提前移除豁免。上游公告：https://github.com/advisories/GHSA-f4j7-r4q5-qw2c
+该记录对应 `CVE-2026-45829`（CVSS 9.3）。当前应用只使用 `PersistentClient`，不暴露 Chroma FastAPI `/api/v2`、不使用 `HttpClient`，集合创建/获取始终显式传入自有 `embedding_function`，所以公告中的远端恶意模型加载路径不可达。该轮 CI gate 的首次期限为 2026-08-13；到期后的重新复核与新期限记录见第 50 节。上游公告：https://github.com/advisories/GHSA-f4j7-r4q5-qw2c
 
 ## 47. 2026-07-17 依赖修复、测试入口与实机复验
 
@@ -3120,7 +3120,7 @@ sentence-transformers -> 5.6.0
 python scripts/run_pip_audit.py -> No known vulnerabilities found, 1 ignored
 ```
 
-唯一跳过项仍是 Windows 环境无法创建目录软链接；唯一忽略项仍是带 `2026-08-13` 自动到期门禁的 `PYSEC-2026-311`。
+唯一跳过项仍是 Windows 环境无法创建目录软链接；当时唯一忽略项是带自动到期门禁的 `PYSEC-2026-311`，后续复核见第 50 节。
 
 Uvicorn 在 `127.0.0.1:8210` 实机启动成功，首页、静态资源、认证状态、仓库列表和聊天接口均返回 200。Playwright 完成页面加载、项目切换和真实提问，浏览器控制台为 0 errors / 0 warnings。现有 `repos/` 中多数目录属于旧版导入产物，缺少当前 catalog/index manifest，因此页面会明确显示“索引不完整”；为避免擅自删除本地数据，本轮保留这些目录，后续使用者可重新导入对应仓库生成新格式索引。
 
@@ -3175,3 +3175,12 @@ git diff --check -> PASS
 真实联网请求使用公开仓库 `octocat/Hello-World`：`POST /chat/online` 返回 200、`repository_saved=false`、`Cache-Control=no-store`，读取 1 个文件/1 个片段并引用 `README`。调用前后 `repos/` 与 `chroma_db/` 的目录数、文件数、总字节和元数据 SHA-256 指纹完全一致，临时仓库也没有出现在 `GET /repositories` 中。
 
 Playwright 实际浏览器验收确认页面默认进入联网模式，回答、来源和 Agent 日志均能显示；切换到深度分析后才显示 ZIP、知识库、报告、README 与删除操作；`localStorage` 没有联网 URL 或模式数据，控制台为 0 errors / 0 warnings。
+
+## 50. 2026-09-01 安全复核、质量门禁与可点击来源
+
+- 重新读取 GitHub Advisory API 与 PyPI：`chromadb 1.5.9` 仍是最新版本，`CVE-2026-45829/45830/45831/45833` 均没有修复版本。
+- 再次确认项目只使用本地 `PersistentClient`、自有 `embedding_function`，静态和运行时门禁拒绝远程 Chroma 客户端与服务入口。
+- 四项 Chroma 公告都依赖本项目未启用的远程 API、服务端多租户授权或 Chroma RBAC；精准豁免共同到期日为 `2026-10-01`，到期自动失败关闭。这只是期限化风险处置，不是漏洞修复。
+- `GitPython` 从 `3.1.50` 升级到 `3.1.61`，消除本轮 audit 报告的 15 条可修复公告。
+- 新增 `requirements-dev.txt`，CI 固定 Ruff、pytest-cov 与 pip-audit 版本；启用 Ruff 核心正确性规则和应用覆盖率不低于 80% 的门禁。
+- GitHub 问答来源新增由后端安全构造的文件/行号 URL，前端只把可信 `https://github.com/` 地址渲染为新标签页链接；ZIP 来源保持不可点击。

@@ -86,6 +86,7 @@ class Source(BaseModel):
     language: str | None = None
     symbol_name: str | None = None
     symbol_type: str | None = None
+    url: str | None = None
 
 
 class ChatResponse(BaseModel):

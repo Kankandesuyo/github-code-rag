@@ -143,19 +143,28 @@ def exercise_chroma_runtime(*, tmp_path: Path, monkeypatch):
         embedding_service.get_embedding_function.cache_clear()
 
 
-def test_audit_gate_has_one_future_dated_waiver():
+def test_audit_gate_has_only_reviewed_future_dated_waivers():
     run_pip_audit = load_gate()
-    assert run_pip_audit.ALLOWED_WAIVERS == frozenset({"PYSEC-2026-311"})
-    assert run_pip_audit.WAIVER_EXPIRES_ON == date(2026, 8, 13)
-    assert run_pip_audit.WAIVER_EXPIRES_ON > date(2026, 7, 13)
+    assert run_pip_audit.ALLOWED_WAIVERS == frozenset(
+        {
+            "PYSEC-2026-311",
+            "CVE-2026-45830",
+            "CVE-2026-45831",
+            "CVE-2026-45833",
+        }
+    )
+    assert run_pip_audit.WAIVER_EXPIRES_ON == date(2026, 10, 1)
+    assert run_pip_audit.WAIVER_EXPIRES_ON > date(2026, 9, 1)
 
 
 def test_audit_gate_applies_waiver_only_before_expiry():
     run_pip_audit = load_gate()
-    active = run_pip_audit.build_audit_command(today=date(2026, 8, 12))
-    expired = run_pip_audit.build_audit_command(today=date(2026, 8, 13))
+    active = run_pip_audit.build_audit_command(today=date(2026, 9, 30))
+    expired = run_pip_audit.build_audit_command(today=date(2026, 10, 1))
 
-    assert active[-2:] == ["--ignore-vuln", "PYSEC-2026-311"]
+    for advisory in run_pip_audit.ALLOWED_WAIVERS:
+        advisory_index = active.index(advisory)
+        assert active[advisory_index - 1] == "--ignore-vuln"
     assert "--ignore-vuln" not in expired
 
 
@@ -167,10 +176,11 @@ def test_audit_gate_propagates_runner_exit_code():
         calls.append(command)
         return 7
 
-    result = run_pip_audit.run_audit(today=date(2026, 8, 12), runner=runner)
+    result = run_pip_audit.run_audit(today=date(2026, 9, 30), runner=runner)
 
     assert result == 7
-    assert calls[0][-2:] == ["--ignore-vuln", "PYSEC-2026-311"]
+    assert calls[0].count("--ignore-vuln") == 4
+    assert set(calls[0][calls[0].index("--ignore-vuln") + 1 :: 2]) == run_pip_audit.ALLOWED_WAIVERS
 
 
 def test_chroma_advisory_attack_surfaces_are_not_exposed():
@@ -208,8 +218,11 @@ def test_chroma_waiver_rationale_and_removal_conditions_are_documented():
 
     for required_text in (
         "CVE-2026-45829",
+        "CVE-2026-45830",
+        "CVE-2026-45831",
+        "CVE-2026-45833",
         "CVSS 9.3",
-        "2026-08-13",
+        "2026-10-01",
         "PersistentClient",
         "HttpClient",
         "embedding_function",

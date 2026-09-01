@@ -237,7 +237,7 @@ localStorage.setItem("githubCodeRagApiKey", "你的APP_API_KEY")
 - CI 运行 `pip-audit`，除期限化精准豁免外，任何漏洞结果都会直接使任务失败。
 - 2026-07-13 实际扫描最初报告 12 个包的 59 条记录；升级兼容栈后二次扫描只剩 `chromadb 1.5.9 / PYSEC-2026-311`。
 - 该记录对应 `CVE-2026-45829`（CVSS 9.3）：攻击需要 Chroma FastAPI `/api/v2` 接收带 `trust_remote_code` 的恶意模型配置，或 `HttpClient` 获取被投毒集合且调用方未显式提供 embedding function。项目只使用本地 `PersistentClient`，不暴露 Chroma 服务，并在每次集合创建/获取时传入项目自有 `embedding_function`，当前攻击路径不可达。
-- 精准豁免仅允许 `PYSEC-2026-311`，截止 `2026-08-13`；到期当天 gate 不再传递 ignore，任何新漏洞也不会被放行。Chroma 发布修复版、项目改用 `HttpClient`、暴露 Chroma API、接受外部集合配置或移除自有 embedding function 时，必须立即移除豁免并重新审计。
+- 精准豁免最初仅允许 `PYSEC-2026-311`；2026-09-01 的完整复核发现三项新增 Chroma 公告并升级了处置范围，见 SEC-025。所有项目共用 `2026-10-01` 截止日，到期当天 gate 不再传递 ignore。
 - 上游公告：https://github.com/advisories/GHSA-f4j7-r4q5-qw2c
 - Docker 基础镜像按 digest 固定，应用仍由非 root `appuser` 运行；Compose 设置 `no-new-privileges:true`、`cap_drop: ALL`、4 CPU 和 8 GiB 内存上限，只发布 localhost 端口。
 - 反向代理需在应用之前限制请求体，例如 Nginx `client_max_body_size 1m;`。
@@ -505,7 +505,7 @@ SaaS 边界：结构化摘要包含 `owner_id=null` 作为未来数据模型兼�
 - 函数调用结果限制为最多 240 条，避免超大仓库把报告响应和 manifest 无限制放大。
 - manifest 升级到 v4，防止旧缓存缺少新增安全分析字段却被误判为最新结果。
 - 重新核对 GitHub Advisory `GHSA-f4j7-r4q5-qw2c`：截至本次审核，`chromadb 1.0.0` 到 `1.5.9` 仍列为受影响，且没有 patched version；Chroma 最新稳定版仍为 `1.5.9`。
-- 当前应用仍只使用进程内 `PersistentClient`，没有暴露公告所述 `/api/v2/.../collections` 远端服务路径，因此继续保留精确、自动到期的 `PYSEC-2026-311` 豁免，截止日不变为 `2026-08-13`。
+- 当前应用仍只使用进程内 `PersistentClient`，没有暴露公告所述 `/api/v2/.../collections` 远端服务路径。该次历史复核之后，项目已在 2026-09-01 再次核对上游并重新设置期限，见 SEC-025。
 
 禁止把该豁免扩展为通用忽略规则。上游发布修复版本、项目切换到远端 Chroma 服务，或开始接受外部 embedding function 配置时，必须立即重新评估并移除豁免。
 
@@ -525,3 +525,18 @@ SaaS 边界：结构化摘要包含 `owner_id=null` 作为未来数据模型兼�
 边界说明：这里的“不落盘”指本应用不持久化源码、manifest 和向量索引。为了搜索，过滤后的源码字节仍会临时进入服务端请求内存；如果启用 DeepSeek，最终选中的脱敏片段与问题可能发送给模型提供商。该模式也不是 GitHub 全库代码审计，结果受读取预算、支持文件类型和 GitHub 限流影响。
 
 验收证据：真实请求 `octocat/Hello-World` 前后，`repos/` 与 `chroma_db/` 的目录数、文件数、总字节及元数据 SHA-256 指纹完全一致，在线仓库未进入 catalog；完整回归为 `174 passed, 1 skipped, 1 warning`。
+
+# SEC-025：Chroma 豁免复核与质量门禁
+
+记录时间：2026-09-01 +09:00
+
+状态：已完成代码处置，等待到期前再次复核上游。
+
+- GitHub Advisory API 仍将 `chromadb 1.5.9` 标为 `CVE-2026-45829/45830/45831/45833` 的受影响版本，四项 `first_patched_version` 均为空；PyPI 显示最新版本仍为 `1.5.9`。
+- `45829` 与 `45833` 依赖远程 `/api/v2` 模型配置入口；`45830` 与 `45831` 依赖 Chroma 服务端多租户授权或 `SimpleRBACAuthorizationProvider`。当前产品不启动 Chroma 服务、不启用 Chroma 认证/RBAC，也没有 Chroma 多租户边界。
+- 再次确认应用源码、Dockerfile、Compose 和 CI 不导入 `HttpClient`、`AsyncHttpClient`、`CloudClient`，不启动 Chroma Server，也不包含 `/api/v2` 远程入口。
+- 运行时测试会替换所有可用远程客户端构造器并在调用时立即失败，同时确认集合始终接收项目自有 `embedding_function`。
+- 精准豁免只允许 `PYSEC-2026-311`、`CVE-2026-45830`、`CVE-2026-45831`、`CVE-2026-45833`，共同自动到期日为 `2026-10-01`。这不是漏洞修复；如果上游发布修复版，必须立即升级并移除豁免。
+- `GitPython` 从 `3.1.50` 升级至 `3.1.61`，覆盖本轮 audit 给出的全部 GitPython 修复版本要求。
+- CI 新增固定版本的 Ruff 核心正确性规则与 `80%` 应用覆盖率门禁；开发工具与生产依赖通过 `requirements-dev.txt` 分离。
+- 问答来源 URL 只由后端从已验证的 GitHub 仓库地址、受过滤文件路径和行号构造；前端只把 `https://github.com/` 地址渲染为新标签页链接，并设置 `rel=noreferrer`。

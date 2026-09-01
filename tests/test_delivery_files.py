@@ -53,11 +53,17 @@ def test_environment_example_documents_production_security_boundary():
 
 def test_ci_uses_python_312_and_runs_required_checks():
     workflow = read(".github/workflows/ci.yml")
+    dev_requirements = read("requirements-dev.txt")
 
     assert 'python-version: "3.12"' in workflow
     assert "python -m compileall -q app tests" in workflow
     assert "python -m pip check" in workflow
-    assert "python -m pytest tests -q" in workflow
+    assert "python -m ruff check --select E9,F63,F7,F82 app tests scripts" in workflow
+    assert "--cov=app" in workflow
+    assert "--cov-fail-under=80" in workflow
+    assert "python -m pip install -r requirements-dev.txt" in workflow
+    assert "pytest-cov==" in dev_requirements
+    assert "ruff==" in dev_requirements
 
 
 def test_default_pytest_command_does_not_scan_imported_repositories():
@@ -73,11 +79,17 @@ def test_ci_runs_expiring_dependency_audit_gate_without_inline_waivers():
     workflow = read(".github/workflows/ci.yml")
     gate = read("scripts/run_pip_audit.py")
 
-    assert "python -m pip install pip-audit" in workflow
+    assert "pip-audit==" in read("requirements-dev.txt")
     assert "python scripts/run_pip_audit.py" in workflow
     assert "--ignore-vuln" not in workflow
     assert "continue-on-error: true" not in workflow
-    assert gate.count('"PYSEC-2026-311"') == 1
+    for advisory in (
+        "PYSEC-2026-311",
+        "CVE-2026-45830",
+        "CVE-2026-45831",
+        "CVE-2026-45833",
+    ):
+        assert gate.count(f'"{advisory}"') == 1
     assert "CVE-2026-45829" not in gate
 
 

@@ -4,6 +4,7 @@ from app.config import get_settings
 from app.main import app
 from app.services.embedding_service import get_embedding_function
 from app.services.file_parser import ParsedFile
+from app.services.repo_loader import save_remote_repository_manifest
 from app.services.vector_store import get_chroma_client
 
 
@@ -34,10 +35,18 @@ def test_remote_import_chat_report_and_readme_journey(tmp_path, monkeypatch):
         ParsedFile(file_path="requirements.txt", content="fastapi\nuvicorn\n"),
         ParsedFile(file_path="README.md", content="# Demo API\nA FastAPI health service.\n"),
     ]
-    monkeypatch.setattr(
-        "app.services.repo_loader.browse_github_repository",
-        lambda _url, _repository_id: remote_files,
-    )
+    def fake_browse(github_url, repository_id):
+        save_remote_repository_manifest(
+            repository_id,
+            github_url,
+            "main",
+            remote_files,
+            sum(len(item.content.encode()) for item in remote_files),
+            "test_fixture",
+        )
+        return remote_files
+
+    monkeypatch.setattr("app.services.repo_loader.browse_github_repository", fake_browse)
 
     with TestClient(app) as client:
         loaded = client.post(
@@ -55,6 +64,13 @@ def test_remote_import_chat_report_and_readme_journey(tmp_path, monkeypatch):
         assert chat.status_code == 200
         assert chat.json()["sources"]
         assert any(source["file_path"] == "app/main.py" for source in chat.json()["sources"])
+        assert any(
+            source["url"].startswith(
+                "https://github.com/example/demo-api/blob/HEAD/app/main.py#L"
+            )
+            for source in chat.json()["sources"]
+            if source["url"]
+        )
 
         report = client.get(f"/repository/report/{repository_id}")
         assert report.status_code == 200

@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from threading import BoundedSemaphore, Lock
 import time
 from typing import Annotated
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
@@ -587,7 +587,34 @@ async def repository_upload_zip(
         _repository_import_slots.release()
 
 
-def build_chat_sources(chunks: list[dict]) -> list[Source]:
+def build_github_source_url(
+    github_url: str | None,
+    file_path: str,
+    start_line: int | None,
+    end_line: int | None,
+) -> str | None:
+    if not github_url:
+        return None
+    parsed = urlsplit(github_url)
+    if parsed.scheme != "https" or parsed.hostname != "github.com":
+        return None
+    repository_path = parsed.path.rstrip("/")
+    if repository_path.endswith(".git"):
+        repository_path = repository_path[:-4]
+    parts = [part for part in repository_path.split("/") if part]
+    source_parts = [part for part in file_path.replace("\\", "/").split("/") if part]
+    if len(parts) != 2 or not source_parts or any(part in {".", ".."} for part in source_parts):
+        return None
+    encoded_path = "/".join(quote(part, safe="") for part in source_parts)
+    fragment = ""
+    if start_line and start_line > 0:
+        fragment = f"#L{start_line}"
+        if end_line and end_line >= start_line:
+            fragment += f"-L{end_line}"
+    return f"https://github.com/{parts[0]}/{parts[1]}/blob/HEAD/{encoded_path}{fragment}"
+
+
+def build_chat_sources(chunks: list[dict], github_url: str | None = None) -> list[Source]:
     seen: set[tuple[str, int]] = set()
     sources: list[Source] = []
     for chunk in chunks:
@@ -606,6 +633,12 @@ def build_chat_sources(chunks: list[dict]) -> list[Source]:
                 language=metadata.get("language"),
                 symbol_name=metadata.get("symbol_name"),
                 symbol_type=metadata.get("symbol_type"),
+                url=build_github_source_url(
+                    github_url,
+                    key[0],
+                    metadata.get("start_line"),
+                    metadata.get("end_line"),
+                ),
             )
         )
     return sources
@@ -651,7 +684,7 @@ def chat_online(request: OnlineChatRequest) -> OnlineChatResponse:
         )
         return OnlineChatResponse(
             answer=answer,
-            sources=build_chat_sources(chunks),
+            sources=build_chat_sources(chunks, str(request.github_url)),
             logs=logs,
             repository_id=result.repository_id,
             files_scanned=result.files_scanned,
@@ -694,7 +727,15 @@ def chat(request: ChatRequest) -> ChatResponse:
         logger.error("code question failed repository_id=%s error_type=%s", request.repository_id, type(exc).__name__)
         raise HTTPException(status_code=500, detail="code question failed") from exc
 
-    return ChatResponse(answer=answer, sources=build_chat_sources(chunks), logs=logs)
+    try:
+        github_url = RepositoryCatalogService().get_repository(request.repository_id).github_url
+    except (InvalidRepositoryIdError, RepositoryNotFoundError):
+        github_url = None
+    return ChatResponse(
+        answer=answer,
+        sources=build_chat_sources(chunks, github_url),
+        logs=logs,
+    )
 
 
 @app.get(

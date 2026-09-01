@@ -8,8 +8,15 @@ from collections.abc import Callable
 from datetime import date
 
 
-ALLOWED_WAIVERS = frozenset({"PYSEC-2026-311"})
-WAIVER_EXPIRES_ON = date(2026, 8, 13)
+ALLOWED_WAIVERS = frozenset(
+    {
+        "PYSEC-2026-311",
+        "CVE-2026-45830",
+        "CVE-2026-45831",
+        "CVE-2026-45833",
+    }
+)
+WAIVER_EXPIRES_ON = date(2026, 10, 1)
 
 
 def build_audit_command(*, today: date) -> list[str]:

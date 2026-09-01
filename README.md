@@ -243,7 +243,7 @@ JSONL 写入锁只保护当前 Python 进程内的线程；多个 worker 或容�
 
 `CVE-2026-45829`（`PYSEC-2026-311`，CVSS 9.3）影响 Chroma 的远端模型加载路径。当前项目只创建本地 `PersistentClient`，不启动 Chroma FastAPI `/api/v2` 服务、不使用 `HttpClient`，而且集合创建和获取都显式传入项目自有 `embedding_function`，因此公告描述的远端恶意模型入口在当前架构中不可达。
 
-CI 只对该公告设置到 `2026-08-13` 前有效的精准豁免；到期当天自动移除豁免并恢复 audit 失败。若 Chroma 提前发布修复版本，应升级并立即移除豁免；如果项目开始暴露 Chroma 服务、使用 `HttpClient`、接受外部集合配置或不再显式传入 embedding function，也必须立即移除豁免并重新评估。上游公告：[GHSA-f4j7-r4q5-qw2c](https://github.com/advisories/GHSA-f4j7-r4q5-qw2c)。
+2026-09-01 重新核对 GitHub Advisory 与 PyPI 后，`chromadb 1.5.9` 仍是最新版本，且 `CVE-2026-45829/45830/45831/45833` 都没有修复版本。四项公告分别依赖远程 `/api/v2`、服务端多租户授权或 `SimpleRBACAuthorizationProvider`；项目再次通过静态和运行时测试确认只使用单进程本地 `PersistentClient`，不启动 Chroma 服务、不配置 Chroma RBAC。CI 因此只对这四项设置到 `2026-10-01` 前有效的精准豁免；到期当天自动移除并恢复 audit 失败。若 Chroma 发布修复版本，应升级并立即移除豁免；如果项目开始暴露 Chroma 服务、使用远程客户端、接受外部集合配置或启用 Chroma 多租户/RBAC，也必须立即移除豁免并重新评估。主要公告：[GHSA-f4j7-r4q5-qw2c](https://github.com/advisories/GHSA-f4j7-r4q5-qw2c)、[GHSA-2wm9-hf6c-p5cr](https://github.com/advisories/GHSA-2wm9-hf6c-p5cr)、[GHSA-xph7-9rjv-w5fr](https://github.com/advisories/GHSA-xph7-9rjv-w5fr)、[GHSA-36p7-vc44-83pf](https://github.com/advisories/GHSA-36p7-vc44-83pf)。
 
 ## 启动
 
@@ -293,8 +293,9 @@ docker compose ps
 1. 默认“联网问答”：粘贴公开 GitHub 仓库地址后直接提问。后端按安全过滤和资源预算读取有限文件，在内存中执行 BM25/关键词检索与排序；请求结束后不会留下源码快照、manifest 或 Chroma 集合。
 2. 需要多轮复用、项目报告、README 或调用图时，再手动切换到“深度分析”，点击“导入并建立索引”。只有这一步会把过滤后的快照和索引写入本机。
 3. 深度导入成功后，知识库列表会保存项目入口。浏览器只记住最后选择的 `repository_id`，不会保存联网仓库 URL、密码、Session、CSRF token 或 API Key。
-4. 报告和 README 可以复制或下载为 Markdown 文件。
-5. “删除知识库”只删除本机的分析快照、manifest 和对应 Chroma 集合，不会修改 GitHub 原仓库。浏览器 Session 删除操作必须通过 CSRF 校验。
+4. GitHub 来源标签可直接打开对应文件与行号；ZIP 来源没有远程地址，继续显示为不可点击标签。
+5. 报告和 README 可以复制或下载为 Markdown 文件。
+6. “删除知识库”只删除本机的分析快照、manifest 和对应 Chroma 集合，不会修改 GitHub 原仓库。浏览器 Session 删除操作必须通过 CSRF 校验。
 
 联网模式的准确隐私边界是“不持久化源码和索引”，不是“完全不传输数据”：服务端仍需把通过过滤的源码字节临时读入请求内存；若配置了 DeepSeek，问题和最终选中的脱敏代码片段可能发送给该模型服务。需要处理私有或高度敏感代码时，应先评估 GitHub 与模型服务的数据政策，或保持 `DEEPSEEK_API_KEY` 为空使用本地回退回答。
 
@@ -314,8 +315,11 @@ docker compose down
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe -m pytest tests -q
+.\.venv\Scripts\python.exe -m pytest tests -q --cov=app --cov-report=term-missing --cov-fail-under=80
+.\.venv\Scripts\python.exe -m ruff check --select E9,F63,F7,F82 app tests scripts
 ```
+
+开发和 CI 依赖统一放在 `requirements-dev.txt`。覆盖率门禁用于阻止测试保护明显倒退；Ruff 当前只启用会影响正确性的核心规则，历史格式规则后续逐步收紧，避免一次产生大面积无关改写。
 
 V2 后端测试可单独运行：
 

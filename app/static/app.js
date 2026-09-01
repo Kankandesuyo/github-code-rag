@@ -428,12 +428,20 @@ function appendMessage(role, content, sources = [], options = {}) {
     const sourceBox = document.createElement("div");
     sourceBox.className = "sources";
     for (const source of sources) {
-      const chip = document.createElement("span");
+      const hasSafeUrl =
+        typeof source.url === "string" && source.url.startsWith("https://github.com/");
+      const chip = document.createElement(hasSafeUrl ? "a" : "span");
       chip.className = "source-chip";
       const lineRange =
         source.start_line && source.end_line ? `:${source.start_line}-${source.end_line}` : "";
       const chunkId = source.chunk_id ?? source.chunk_index;
       chip.textContent = `${source.file_path}${lineRange} #${chunkId}`;
+      if (hasSafeUrl) {
+        chip.href = source.url;
+        chip.target = "_blank";
+        chip.rel = "noreferrer";
+        chip.title = "在 GitHub 打开对应代码行";
+      }
       sourceBox.appendChild(chip);
     }
     bubble.appendChild(sourceBox);

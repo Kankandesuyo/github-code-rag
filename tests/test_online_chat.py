@@ -97,6 +97,10 @@ def test_online_chat_uses_real_in_memory_pipeline_without_persistence(tmp_path, 
     assert body["files_scanned"] == 2
     assert body["chunks_scanned"] >= 2
     assert any(source["file_path"] == "app/main.py" for source in body["sources"])
+    main_source = next(source for source in body["sources"] if source["file_path"] == "app/main.py")
+    assert main_source["url"].startswith(
+        "https://github.com/example/demo-api/blob/HEAD/app/main.py#L"
+    )
     assert any(log["agent"] == "InMemoryRetriever" for log in body["logs"])
     assert response.headers["cache-control"] == "no-store"
     assert repositories_after == repositories_before
@@ -283,3 +287,6 @@ def test_frontend_defaults_to_online_mode_without_persisting_online_url():
     assert "repository_saved" not in script
     assert 'localStorage.setItem("onlineGithubUrl"' not in script
     assert 'setWorkspaceMode("online")' in script
+    assert 'document.createElement(hasSafeUrl ? "a" : "span")' in script
+    assert 'source.url.startsWith("https://github.com/")' in script
+    assert 'chip.rel = "noreferrer"' in script

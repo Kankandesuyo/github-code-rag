@@ -35,6 +35,8 @@ GitHub URL 或 ZIP -> Repository Loader -> File Parser -> Symbol-level Chunks
   -> LLM Answer Generator -> Answer + Sources + Agent Logs
 ```
 
+GitHub 来源由 API 层从已验证仓库地址和过滤后的相对路径构造为 `blob/HEAD/...#Lx-Ly` 链接；ZIP 来源没有可信远程地址，因此只返回文件与行号，不生成 URL。
+
 两条链路由独立 API 保证数据边界。`POST /chat/online` 没有客户端可控制的 `persist` 参数，并且不调用 `load_repository()`、Chroma 或索引 manifest；`POST /repository/load` 才负责持久化。联网模式仍会在请求期间把过滤后的源文件读入服务端内存，配置外部模型时还会发送最终选中的脱敏证据片段。
 
 ## 主要模块
