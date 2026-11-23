@@ -66,6 +66,7 @@ from app.services.llm_service import (
     LLMServiceError,
     answer_question,
     build_retrieval_queries,
+    condense_question,
     redact_sensitive_text,
     rerank_chunks,
     stream_answer_question,
@@ -713,12 +714,21 @@ def chat_repository(repository_id: str) -> RepositorySummary:
 
 
 def retrieve_chat_evidence(request: ChatRequest) -> tuple[list[dict], list[AgentLog]]:
-    previous_question = next((item.content for item in reversed(request.history) if item.role == "user"), "")
     query = request.question
-    if previous_question:
-        query += f"\n此前问题：{redact_sensitive_text(previous_question)}"
+    logs: list[AgentLog] = []
+    if request.history:
+        started = time.perf_counter()
+        query = condense_question(request.question, request.history)
+        logs.append(
+            AgentLog(
+                agent="QueryCondenser",
+                action="Preparing follow-up question for retrieval",
+                duration_ms=round((time.perf_counter() - started) * 1000, 2),
+            )
+        )
     try:
-        return rag_agent.search(request.repository_id, query)
+        chunks, search_logs = rag_agent.search(request.repository_id, query)
+        return chunks, [*logs, *search_logs]
     except VectorStoreError as exc:
         raise HTTPException(status_code=500, detail="vector store operation failed") from exc
     except (RepositoryNotFoundError, FileNotFoundError) as exc:

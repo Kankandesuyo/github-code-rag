@@ -184,3 +184,92 @@ def test_model_stream_yields_incrementally_and_redacts_split_values(monkeypatch)
     assert "[REDACTED]" in result
     assert "private_value" not in result
     assert result.endswith("Last line")
+
+
+
+def test_first_question_skips_condensation_even_with_model_key(chat_api, monkeypatch):
+    monkeypatch.setattr(get_settings(), "deepseek_api_key", "test-key")
+    monkeypatch.setattr(main, "answer_question", lambda *_: "answer")
+
+    def unexpected_client():
+        pytest.fail("the first question must not trigger an LLM query rewrite")
+
+    monkeypatch.setattr(llm_service, "get_llm_client", unexpected_client)
+    response = chat_api.post("/chat", json={"repository_id": "demo", "question": "describe health"})
+    assert response.status_code == 200
+    assert all(log["agent"] != "QueryCondenser" for log in response.json()["logs"])
+
+
+@pytest.mark.parametrize("provider_outcome", ["success", "error", "blank", "no-key"])
+def test_follow_up_condensation_and_fallback_use_the_expected_search_query(chat_api, monkeypatch, provider_outcome):
+    original = "它会返回什么？"
+    standalone = "health 接口会返回什么？"
+    if provider_outcome != "no-key":
+        monkeypatch.setattr(get_settings(), "deepseek_api_key", "test-key")
+    calls = []
+
+    def completion(**kwargs):
+        calls.append(kwargs)
+        if provider_outcome == "error":
+            raise RuntimeError("provider request timed out")
+        content = standalone if provider_outcome == "success" else " "
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=completion)))
+    monkeypatch.setattr(llm_service, "get_llm_client", lambda: client)
+
+    def search(repository_id, query):
+        assert repository_id == "demo"
+        expected = standalone if provider_outcome == "success" else f"{original}\n此前问题：{HISTORY[0]['content']}"
+        assert query == expected
+        return [CHUNK], []
+
+    def answer(question, chunks, *, history):
+        assert question == original
+        assert chunks == [CHUNK]
+        assert [item.model_dump() for item in history] == HISTORY
+        return "grounded"
+
+    monkeypatch.setattr(main.rag_agent, "search", search)
+    monkeypatch.setattr(main, "answer_question", answer)
+    response = chat_api.post("/chat", json={"repository_id": "demo", "question": original, "history": HISTORY})
+    assert response.status_code == 200
+    assert response.json()["answer"] == "grounded"
+    log = response.json()["logs"][0]
+    assert log["agent"] == "QueryCondenser"
+    assert log["duration_ms"] >= 0
+
+    if provider_outcome == "no-key":
+        assert calls == []
+    else:
+        call, = calls
+        assert call["temperature"] == 0
+        assert json.loads(call["messages"][1]["content"]) == {"question": original, "history": HISTORY}
+
+
+def test_answer_history_drops_older_messages_and_keeps_latest_turn(monkeypatch):
+    monkeypatch.setenv("MAX_CHAT_HISTORY_CHARACTERS", "10")
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.max_chat_history_characters == 10
+    monkeypatch.setattr(llm_service, "get_settings", lambda: settings)
+
+    history = [
+        ChatHistoryMessage(role="user", content="old"),
+        ChatHistoryMessage(role="assistant", content="discard this long earlier answer"),
+        ChatHistoryMessage(role="user", content="最新问题"),
+        ChatHistoryMessage(role="assistant", content="最新答案"),
+    ]
+    _, prompt = llm_service.answer_messages("follow-up", [CHUNK], history)
+    prior = json.loads(prompt["content"].splitlines()[0].partition("：")[2])
+    assert prior == [item.model_dump() for item in history[-2:]]
+    assert sum(len(item["content"]) for item in prior) <= 10
+
+
+def test_answer_history_truncates_oversized_latest_message(monkeypatch):
+    monkeypatch.setattr(get_settings(), "max_chat_history_characters", 5)
+    history = [ChatHistoryMessage(role="user", content="older"), ChatHistoryMessage(role="assistant", content="123456")]
+    _, prompt = llm_service.answer_messages("follow-up", [CHUNK], history)
+    prior = json.loads(prompt["content"].splitlines()[0].partition("：")[2])
+    assert prior == [{"role": "assistant", "content": "12345"}]
