@@ -16,6 +16,7 @@ from app.config import get_settings
 from app.services.embedding_service import get_embedding_function, get_embedding_signature
 from app.services.file_parser import DocumentChunk
 from app.services.repository_catalog import RepositoryNotFoundError, resolve_repository_path
+from app.utils.atomic_files import atomic_write_json
 
 
 class VectorStoreError(RuntimeError):
@@ -67,9 +68,33 @@ def build_chroma_settings() -> ChromaSettings:
 
 
 def get_collection_name(repository_id: str) -> str:
-    safe_id = repository_id.replace("-", "_")
-    signature = get_embedding_signature()
-    return f"repo_{safe_id}_{signature}"[:63]
+    repository_hash = hashlib.sha1(repository_id.encode("utf-8")).hexdigest()[:16]
+    return f"repo_{repository_hash}_{get_embedding_signature()}"
+
+
+def get_repository_collection(repository_id: str) -> Collection:
+    client = get_chroma_client()
+    try:
+        collection = client.get_collection(
+            name=get_collection_name(repository_id), embedding_function=get_embedding_function()
+        )
+    except NotFoundError as exc:
+        manifest = load_vector_index_manifest(repository_id) or {}
+        signature = get_embedding_signature()
+        legacy_name = f"repo_{repository_id.replace('-', '_')}_{signature}"[:63]
+        if (
+            manifest.get("repository_id") != repository_id
+            or manifest.get("collection_name") != legacy_name
+            or manifest.get("embedding_signature") != signature
+        ):
+            raise RepositoryNotFoundError("repository index not found") from exc
+        try:
+            collection = client.get_collection(name=legacy_name, embedding_function=get_embedding_function())
+        except NotFoundError as legacy_exc:
+            raise RepositoryNotFoundError("repository index not found") from legacy_exc
+    if (collection.metadata or {}).get("repository_id") != repository_id:
+        raise VectorStoreError("index repository mismatch")
+    return collection
 
 
 def get_or_create_collection(repository_id: str) -> Collection:
@@ -180,8 +205,7 @@ def load_vector_index_manifest(repository_id: str) -> dict | None:
 
 def save_vector_index_manifest(repository_id: str, manifest: dict) -> None:
     path = vector_index_manifest_path(repository_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(path, manifest)
 
 
 def add_chunks_to_collection(collection: Collection, repository_id: str, chunks: list[DocumentChunk]) -> int:
@@ -687,14 +711,7 @@ def retrieve_relevant_chunks(repository_id: str, question: str | list[str]) -> l
     primary_query = queries[0] if queries else ""
 
     try:
-        try:
-            collection = get_chroma_client().get_collection(
-                name=get_collection_name(repository_id), embedding_function=get_embedding_function()
-            )
-        except NotFoundError as exc:
-            raise RepositoryNotFoundError("repository index not found") from exc
-        if (collection.metadata or {}).get("repository_id") != repository_id:
-            raise VectorStoreError("index repository mismatch")
+        collection = get_repository_collection(repository_id)
         if collection.count() == 0:
             return []
         candidate_k = max(settings.retrieval_candidate_k, settings.retrieval_k)

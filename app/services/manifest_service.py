@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from app.agents.repository_agent import RepositoryAgent
 from app.schemas.report_schema import AgentLog
+from app.utils.atomic_files import atomic_write_json
 
 
 MANIFEST_VERSION = 4
@@ -52,13 +53,12 @@ class RepositoryManifestCache:
 
     def save(self, repo_path: Path, signature: dict[str, int], data: dict[str, Any]) -> None:
         path = self.manifest_path(repo_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "signature": signature,
             "generated_at": int(time.time()),
             "data": data,
         }
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_json(path, payload)
 
     def get_or_build(
         self,

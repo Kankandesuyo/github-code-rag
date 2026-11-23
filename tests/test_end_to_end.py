@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
@@ -8,7 +9,8 @@ from app.services.repo_loader import save_remote_repository_manifest
 from app.services.vector_store import get_chroma_client
 
 
-def test_remote_import_chat_report_and_readme_journey(tmp_path, monkeypatch):
+@pytest.mark.parametrize("commit_sha", [None, "a" * 40])
+def test_remote_import_chat_report_and_readme_journey(tmp_path, monkeypatch, commit_sha):
     settings = get_settings()
     monkeypatch.setattr(settings, "repos_dir", tmp_path / "repos")
     monkeypatch.setattr(settings, "chroma_dir", tmp_path / "chroma")
@@ -43,6 +45,7 @@ def test_remote_import_chat_report_and_readme_journey(tmp_path, monkeypatch):
             remote_files,
             sum(len(item.content.encode()) for item in remote_files),
             "test_fixture",
+            commit_sha=commit_sha,
         )
         return remote_files
 
@@ -66,7 +69,7 @@ def test_remote_import_chat_report_and_readme_journey(tmp_path, monkeypatch):
         assert any(source["file_path"] == "app/main.py" for source in chat.json()["sources"])
         assert any(
             source["url"].startswith(
-                "https://github.com/example/demo-api/blob/HEAD/app/main.py#L"
+                f"https://github.com/example/demo-api/blob/{commit_sha or 'HEAD'}/app/main.py#L"
             )
             for source in chat.json()["sources"]
             if source["url"]

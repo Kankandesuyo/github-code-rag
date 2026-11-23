@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 from app.config import get_settings
 from app.services.file_parser import ParsedFile, split_files_into_chunks
 from app.services.repository_catalog import resolve_repository_path
+from app.utils.atomic_files import atomic_write_json
 from app.utils.file_utils import should_ignore_dir, should_ignore_file
 
 
@@ -100,6 +101,7 @@ def activate_import_budget(budget: ImportBudget) -> Iterator[None]:
 GITHUB_OWNER_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 REMOTE_REPOSITORY_MANIFEST_FILE = "remote_repository_manifest.json"
 REMOTE_ANALYSIS_SNAPSHOT_DIR = "source_snapshot"
+COMMIT_SHA_PATTERN = re.compile(r"[0-9a-f]{40}")
 GITHUB_WEB_RATE_LIMIT_MARKER = "set server-side GITHUB_TOKEN"
 
 
@@ -271,6 +273,18 @@ def get_github_tree(owner: str, repo: str, branch: str, timeout_seconds: int) ->
     if not isinstance(tree, list):
         raise RepositoryLoadError("GitHub API did not return a repository tree")
     return tree
+
+
+def get_github_commit_sha(owner: str, repo: str, branch: str, timeout_seconds: int) -> str | None:
+    try:
+        payload = fetch_github_json(
+            f"https://api.github.com/repos/{owner}/{repo}/commits/{quote(branch, safe='')}",
+            timeout_seconds,
+        )
+    except (RepositoryLoadError, TimeoutError):
+        return None
+    sha = payload.get("sha")
+    return sha if isinstance(sha, str) and COMMIT_SHA_PATTERN.fullmatch(sha) else None
 
 
 def should_skip_remote_path(file_path: str) -> bool:
@@ -462,6 +476,7 @@ def browse_github_repository_via_web(
         settings = get_settings()
         timeout = settings.github_api_timeout_seconds
         default_branch: str | None = None
+        commit_sha: str | None = None
         files: list[ParsedFile] = []
         total_bytes = 0
         visited_dirs: set[str] = set()
@@ -486,6 +501,12 @@ def browse_github_repository_via_web(
             page = fetch_url_text(page_url, timeout)
             if default_branch is None:
                 default_branch = parse_default_branch_from_web_page(page, owner, repo)
+                if persist_manifest:
+                    route = parse_web_embedded_data(page).get("payload", {}).get("codeViewRepoRoute", {})
+                    ref = route.get("refInfo", {})
+                    sha = ref.get("currentOid")
+                    if ref.get("name") == default_branch and isinstance(sha, str) and COMMIT_SHA_PATTERN.fullmatch(sha):
+                        commit_sha = sha
 
             for kind, file_path in parse_web_directory_entries(page, owner, repo, default_branch):
                 if kind == "tree":
@@ -498,7 +519,12 @@ def browse_github_repository_via_web(
                     break
                 if should_skip_remote_path(file_path):
                     continue
-                parsed_file = fetch_web_raw_file(owner, repo, default_branch, file_path, timeout)
+                try:
+                    parsed_file = fetch_web_raw_file(owner, repo, commit_sha or default_branch, file_path, timeout)
+                except RepositoryLoadError as exc:
+                    if not commit_sha or str(exc) != "GitHub web page or raw file was not found":
+                        raise
+                    continue  # The branch listing may have advanced after the SHA was captured.
                 if parsed_file is None:
                     continue
                 file_bytes = len(parsed_file.content.encode("utf-8", errors="ignore"))
@@ -518,6 +544,7 @@ def browse_github_repository_via_web(
                 files,
                 total_bytes,
                 "github_web_browser",
+                commit_sha=commit_sha,
             )
         return files
 
@@ -535,7 +562,11 @@ def browse_github_repository(
         owner, repo = parse_github_owner_repo(github_url)
         try:
             default_branch = get_github_default_branch(owner, repo, settings.github_api_timeout_seconds)
-            tree = get_github_tree(owner, repo, default_branch, settings.github_api_timeout_seconds)
+            commit_sha = (
+                get_github_commit_sha(owner, repo, default_branch, settings.github_api_timeout_seconds)
+                if persist_manifest else None
+            )
+            tree = get_github_tree(owner, repo, commit_sha or default_branch, settings.github_api_timeout_seconds)
         except RepositoryLoadError as exc:
             if is_api_rate_limit_error(exc):
                 return browse_github_repository_via_web(
@@ -586,6 +617,7 @@ def browse_github_repository(
                 files,
                 total_bytes,
                 "github_api_browser",
+                commit_sha=commit_sha,
             )
         return files
 
@@ -597,10 +629,11 @@ def save_remote_repository_manifest(
     files: list[ParsedFile],
     total_bytes: int,
     source: str,
+    *,
+    commit_sha: str | None = None,
 ) -> None:
     settings = get_settings()
     manifest_dir = resolve_repository_path(settings.repos_dir, repository_id) / ".codebase_agent"
-    manifest_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "source": source,
         "github_url": github_url,
@@ -609,10 +642,12 @@ def save_remote_repository_manifest(
         "total_remote_bytes": total_bytes,
         "file_paths": [item.file_path for item in files],
     }
-    (manifest_dir / REMOTE_REPOSITORY_MANIFEST_FILE).write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    if commit_sha and COMMIT_SHA_PATTERN.fullmatch(commit_sha):
+        manifest["commit_sha"] = commit_sha
+        manifest["snapshot_file_hashes"] = {
+            item.file_path: hashlib.sha256(item.content.encode("utf-8")).hexdigest() for item in files
+        }
+    atomic_write_json(manifest_dir / REMOTE_REPOSITORY_MANIFEST_FILE, manifest)
 
 
 def save_remote_analysis_snapshot(repository_id: str, files: list[ParsedFile]) -> Path:

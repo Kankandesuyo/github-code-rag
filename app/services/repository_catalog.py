@@ -58,6 +58,7 @@ class RepositorySummary:
     source_type: str | None
     display_name: str | None
     upload_name: str | None
+    commit_sha: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -173,6 +174,7 @@ class RepositoryCatalogService:
             source_type=source_type,
             display_name=display_name,
             upload_name=upload_name,
+            commit_sha=remote.get("commit_sha") if isinstance(remote.get("commit_sha"), str) else None,
         )
 
     def list_repositories(self) -> list[RepositorySummary]:

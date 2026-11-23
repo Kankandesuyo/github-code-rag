@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-chat"
+    llm_timeout_seconds: float = Field(default=60, gt=0)
     app_api_key: str = ""
     admin_username: str = ""
     admin_password_hash: str = ""

@@ -454,6 +454,7 @@ def test_browse_github_repository_traverses_remote_tree_and_saves_metadata(tmp_p
         raise AssertionError(f"unexpected file fetch: {entry['path']}")
 
     monkeypatch.setattr("app.services.repo_loader.get_github_default_branch", fake_default_branch)
+    monkeypatch.setattr("app.services.repo_loader.get_github_commit_sha", lambda *_: None)
     monkeypatch.setattr("app.services.repo_loader.get_github_tree", fake_tree)
     monkeypatch.setattr("app.services.repo_loader.fetch_remote_file", fake_file)
 

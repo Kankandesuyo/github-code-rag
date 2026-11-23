@@ -1,11 +1,16 @@
 import json
+import logging
 import re
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 from openai import OpenAI
 
 from app.config import get_settings
 from app.services.vector_store import detect_query_intents, expand_query_keywords, path_priority, tokenize_text
+
+
+logger = logging.getLogger(__name__)
 
 
 class LLMServiceError(RuntimeError):
@@ -32,64 +37,63 @@ def get_llm_client() -> OpenAI:
     settings = get_settings()
     if not settings.deepseek_api_key:
         raise LLMServiceError("DEEPSEEK_API_KEY is not configured")
-    return OpenAI(api_key=settings.deepseek_api_key, base_url=settings.deepseek_base_url)
+    return OpenAI(
+        api_key=settings.deepseek_api_key,
+        base_url=settings.deepseek_base_url,
+        timeout=settings.llm_timeout_seconds,
+        max_retries=1,
+    )
 
 
 def build_retrieval_queries(question: str) -> list[str]:
     settings = get_settings()
     queries = [question]
-    if not settings.enable_query_expansion and not settings.enable_hyde:
-        return queries
-    if not settings.deepseek_api_key:
-        return queries
-
-    client = get_llm_client()
-
+    prompts = {}
     if settings.enable_query_expansion:
-        try:
-            response = client.chat.completions.create(
-                model=settings.deepseek_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "你是代码仓库检索查询改写器。给定用户问题，生成 2 到 3 个不同角度的检索 query。"
-                            "query 应包含可能的英文技术词、文件名、函数名、模块名或同义表达。"
-                            "只返回 JSON 数组字符串，不要解释。"
-                        ),
-                    },
-                    {"role": "user", "content": question},
-                ],
-                temperature=0.2,
-            )
-            content = response.choices[0].message.content or "[]"
-            parsed = json.loads(content)
-            if isinstance(parsed, list):
-                queries.extend(str(item) for item in parsed[:3] if str(item).strip())
-        except Exception:
-            pass
-
+        prompts["rewrite"] = (
+            "你是代码仓库检索查询改写器。给定用户问题，生成 2 到 3 个不同角度的检索 query。"
+            "query 应包含可能的英文技术词、文件名、函数名、模块名或同义表达。"
+            "只返回 JSON 数组字符串，不要解释。"
+        )
     if settings.enable_hyde:
+        prompts["hyde"] = (
+            "你是代码仓库 RAG 的 HyDE 生成器。根据用户问题生成一段可能出现在仓库文档或代码注释中的"
+            "假设答案/摘要，用于语义检索。不要编造具体不存在的文件路径。"
+        )
+    if not prompts or not settings.deepseek_api_key:
+        return queries
+
+    try:
+        client = get_llm_client()
+    except Exception as exc:
+        logger.debug("query expansion client unavailable error_type=%s", type(exc).__name__)
+        return queries
+
+    def complete(kind: str) -> str:
         try:
             response = client.chat.completions.create(
                 model=settings.deepseek_model,
                 messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "你是代码仓库 RAG 的 HyDE 生成器。根据用户问题生成一段可能出现在仓库文档或代码注释中的"
-                            "假设答案/摘要，用于语义检索。不要编造具体不存在的文件路径。"
-                        ),
-                    },
-                    {"role": "user", "content": question},
+                    {"role": "system", "content": prompts[kind]},
+                    {"role": "user", "content": redact_sensitive_text(question)},
                 ],
                 temperature=0.2,
             )
-            hyde = response.choices[0].message.content
-            if hyde:
-                queries.append(hyde)
-        except Exception:
-            pass
+            return response.choices[0].message.content or ""
+        except Exception as exc:
+            logger.debug("query expansion failed kind=%s error_type=%s", kind, type(exc).__name__)
+            return ""
+
+    if len(prompts) == 2:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outputs = dict(zip(prompts, executor.map(complete, prompts), strict=True))
+    else:
+        kind = next(iter(prompts))
+        outputs = {kind: complete(kind)}
+
+    rewritten = extract_json_array(outputs.get("rewrite", "")) or []
+    queries.extend(item for item in rewritten[:3] if isinstance(item, str))
+    queries.append(outputs.get("hyde", ""))
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -389,7 +393,6 @@ def answer_question(question: str, chunks: list[dict]) -> str:
     if not settings.deepseek_api_key:
         return build_no_key_fallback_answer(question, chunks)
 
-    client = OpenAI(api_key=settings.deepseek_api_key, base_url=settings.deepseek_base_url)
     context = build_context(chunks)
     source_summary = build_source_summary(chunks)
 
@@ -422,6 +425,7 @@ def answer_question(question: str, chunks: list[dict]) -> str:
     )
 
     try:
+        client = get_llm_client()
         response = client.chat.completions.create(
             model=settings.deepseek_model,
             messages=[

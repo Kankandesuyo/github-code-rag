@@ -70,6 +70,7 @@ from app.services.archive_loader import (
 )
 from app.services.report_service import ReportService
 from app.services.repo_loader import (
+    COMMIT_SHA_PATTERN,
     ImportBudget,
     RepositoryLoadError,
     activate_import_budget,
@@ -593,6 +594,7 @@ def build_github_source_url(
     file_path: str,
     start_line: int | None,
     end_line: int | None,
+    commit_sha: str | None = None,
 ) -> str | None:
     if not github_url:
         return None
@@ -612,10 +614,13 @@ def build_github_source_url(
         fragment = f"#L{start_line}"
         if end_line and end_line >= start_line:
             fragment += f"-L{end_line}"
-    return f"https://github.com/{parts[0]}/{parts[1]}/blob/HEAD/{encoded_path}{fragment}"
+    ref = commit_sha if commit_sha and COMMIT_SHA_PATTERN.fullmatch(commit_sha) else "HEAD"
+    return f"https://github.com/{parts[0]}/{parts[1]}/blob/{ref}/{encoded_path}{fragment}"
 
 
-def build_chat_sources(chunks: list[dict], github_url: str | None = None) -> list[Source]:
+def build_chat_sources(
+    chunks: list[dict], github_url: str | None = None, commit_sha: str | None = None
+) -> list[Source]:
     seen: set[tuple[str, int]] = set()
     sources: list[Source] = []
     for chunk in chunks:
@@ -639,6 +644,7 @@ def build_chat_sources(chunks: list[dict], github_url: str | None = None) -> lis
                     key[0],
                     metadata.get("start_line"),
                     metadata.get("end_line"),
+                    commit_sha,
                 ),
             )
         )
@@ -733,7 +739,7 @@ def chat(request: ChatRequest) -> ChatResponse:
 
     return ChatResponse(
         answer=answer,
-        sources=build_chat_sources(chunks, summary.github_url),
+        sources=build_chat_sources(chunks, summary.github_url, summary.commit_sha),
         logs=logs,
     )
 
