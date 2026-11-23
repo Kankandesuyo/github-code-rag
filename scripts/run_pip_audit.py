@@ -15,7 +15,7 @@ ALLOWED_WAIVERS = frozenset(
         "CVE-2026-45833",
     }
 )
-WAIVER_EXPIRES_ON = date(2026, 12, 24)
+WAIVER_EXPIRES_ON = date(2027, 1, 24)
 
 
 def build_audit_command(*, today: date) -> list[str]:

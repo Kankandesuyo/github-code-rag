@@ -260,7 +260,7 @@ JSONL 写入锁只保护当前 Python 进程内的线程；多个 worker 或容�
 
 2026-11-24 核对 PyPI 和 GitHub Advisory。`GitPython 3.2.1` 高于 CVE-2026-110855 的修复门槛 3.2.0。`transformers 5.24.0` 高于 PYSEC-2026-3929 的修复门槛 5.10.0，也超出 PYSEC-2026-4174 的受影响范围（4.49.0 至 5.8.1），且该版本的源码在下载自定义生成模块前检查远程代码信任设置。两项依赖均无审计豁免。[GitPython 发布记录](https://pypi.org/project/GitPython/3.2.1/) · [PYSEC-2026-3929](https://osv.dev/vulnerability/PYSEC-2026-3929) · [PYSEC-2026-4174](https://osv.dev/vulnerability/PYSEC-2026-4174) · [Transformers 5.24.0 源码](https://github.com/huggingface/transformers/blob/v5.24.0/src/transformers/generation/utils.py)
 
-`chromadb 1.5.9` 仍是 PyPI 最新正式版本。以下四条公告均无已发布修复，当前部署只使用本地 `PersistentClient`，集合操作显式传入项目自有的 `embedding_function`。四条豁免均在 **2026-12-24** 到期，审计从当天起重新报告它们。[ChromaDB 发布记录](https://pypi.org/project/chromadb/#history)
+2026-11-24 复核：`chromadb 1.5.9` 仍是 PyPI 最新正式版本（发布于 2026-05-05），OSV 中没有新增的 Chroma 公告。以下四条公告均无已发布修复，当前部署只使用本地 `PersistentClient`，集合操作显式传入项目自有的 `embedding_function`。四条豁免均在 **2027-01-24** 到期，审计从当天起重新报告它们。[ChromaDB 发布记录](https://pypi.org/project/chromadb/#history)
 
 | 公告 | 当前部署的豁免理由 |
 |---|---|

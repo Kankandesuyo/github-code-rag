@@ -153,14 +153,14 @@ def test_audit_gate_has_only_reviewed_future_dated_waivers():
         )
         == run_pip_audit.ALLOWED_WAIVERS
     )
-    assert date(2026, 12, 24) == run_pip_audit.WAIVER_EXPIRES_ON
+    assert date(2027, 1, 24) == run_pip_audit.WAIVER_EXPIRES_ON
     assert date(2026, 11, 24) < run_pip_audit.WAIVER_EXPIRES_ON
 
 
 def test_audit_gate_applies_waiver_only_before_expiry():
     run_pip_audit = load_gate()
-    active = run_pip_audit.build_audit_command(today=date(2026, 12, 23))
-    expired = run_pip_audit.build_audit_command(today=date(2026, 12, 24))
+    active = run_pip_audit.build_audit_command(today=date(2027, 1, 23))
+    expired = run_pip_audit.build_audit_command(today=date(2027, 1, 24))
 
     for advisory in run_pip_audit.ALLOWED_WAIVERS:
         advisory_index = active.index(advisory)
@@ -176,7 +176,7 @@ def test_audit_gate_propagates_runner_exit_code():
         calls.append(command)
         return 7
 
-    result = run_pip_audit.run_audit(today=date(2026, 12, 23), runner=runner)
+    result = run_pip_audit.run_audit(today=date(2027, 1, 23), runner=runner)
 
     assert result == 7
     assert calls[0].count("--ignore-vuln") == 4
@@ -218,7 +218,7 @@ def test_chroma_waiver_rationale_and_removal_conditions_are_documented():
         "CVE-2026-45833",
         "CVSS 9.3",
         "2026-11-24",
-        "2026-12-24",
+        "2027-01-24",
         "PYSEC-2026-3813",
         "PYSEC-2026-3814",
         "PYSEC-2026-3815",
