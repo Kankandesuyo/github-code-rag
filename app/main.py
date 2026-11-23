@@ -4,7 +4,6 @@ from contextlib import asynccontextmanager
 import asyncio
 import hashlib
 import logging
-import re
 import secrets
 from tempfile import TemporaryDirectory
 from threading import BoundedSemaphore, Lock
@@ -80,6 +79,7 @@ from app.services.repository_catalog import (
     InvalidRepositoryIdError,
     RepositoryCatalogService,
     RepositoryNotFoundError,
+    resolve_repository_path,
 )
 from app.services.vector_store import (
     VectorStoreError,
@@ -108,7 +108,6 @@ app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), na
 rag_agent = RAGAgent()
 report_service = ReportService()
 repository_catalog_service = RepositoryCatalogService()
-REPOSITORY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,140}$")
 _rate_limit_lock = Lock()
 _rate_limit_buckets: dict[str, deque[float]] = {}
 _repository_import_slots = BoundedSemaphore(get_settings().max_concurrent_imports)
@@ -238,8 +237,10 @@ def _prune_rate_limit_buckets(cutoff: float) -> None:
 
 
 def validate_repository_id(repository_id: str) -> None:
-    if not REPOSITORY_ID_PATTERN.fullmatch(repository_id):
-        raise HTTPException(status_code=400, detail="invalid repository_id")
+    try:
+        resolve_repository_path(get_settings().repos_dir, repository_id)
+    except InvalidRepositoryIdError as exc:
+        raise HTTPException(status_code=400, detail="invalid repository_id") from exc
 
 
 def public_repository_import_detail(exc: RepositoryLoadError) -> str:
@@ -704,6 +705,7 @@ def chat_online(request: OnlineChatRequest) -> OnlineChatResponse:
 @app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key), Depends(enforce_rate_limit)])
 def chat(request: ChatRequest) -> ChatResponse:
     try:
+        summary = repository_catalog_service.get_repository(request.repository_id)
         chunks, logs = rag_agent.search(request.repository_id, request.question)
         if not chunks:
             return ChatResponse(answer="无法从代码库中找到可靠依据。", sources=[], logs=logs)
@@ -721,19 +723,17 @@ def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=500, detail="vector store operation failed") from exc
     except LLMServiceError as exc:
         raise HTTPException(status_code=500, detail="answer generation failed") from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except InvalidRepositoryIdError as exc:
+        raise HTTPException(status_code=400, detail="invalid repository_id") from exc
+    except (RepositoryNotFoundError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="repository not found") from exc
     except Exception as exc:
         logger.error("code question failed repository_id=%s error_type=%s", request.repository_id, type(exc).__name__)
         raise HTTPException(status_code=500, detail="code question failed") from exc
 
-    try:
-        github_url = RepositoryCatalogService().get_repository(request.repository_id).github_url
-    except (InvalidRepositoryIdError, RepositoryNotFoundError):
-        github_url = None
     return ChatResponse(
         answer=answer,
-        sources=build_chat_sources(chunks, github_url),
+        sources=build_chat_sources(chunks, summary.github_url),
         logs=logs,
     )
 
@@ -779,6 +779,8 @@ def debug_retrieval(request: ChatRequest) -> dict:
         retrieval_queries = build_retrieval_queries(request.question)
         candidate_chunks = retrieve_relevant_chunks(request.repository_id, retrieval_queries)
         chunks = rerank_chunks(request.question, candidate_chunks)
+    except RepositoryNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="repository not found") from exc
     except VectorStoreError as exc:
         raise HTTPException(status_code=500, detail="vector store operation failed") from exc
 

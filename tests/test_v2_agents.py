@@ -288,13 +288,16 @@ def test_report_and_readme_endpoints(tmp_path, monkeypatch):
     assert readme.json()["logs"]
 
 
-def test_chat_no_evidence_returns_grounded_message(monkeypatch):
+def test_chat_no_evidence_returns_grounded_message(monkeypatch, tmp_path):
+    monkeypatch.setattr(get_settings(), "repos_dir", tmp_path)
+    (tmp_path / "demo").mkdir()
+
     def fake_search(_repository_id: str, _question: str):
         return [], []
 
     monkeypatch.setattr("app.main.rag_agent.search", fake_search)
     client = TestClient(app)
-    response = client.post("/chat", json={"repository_id": "missing", "question": "anything"})
+    response = client.post("/chat", json={"repository_id": "demo", "question": "anything"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -303,7 +306,10 @@ def test_chat_no_evidence_returns_grounded_message(monkeypatch):
     assert payload["logs"] == []
 
 
-def test_chat_without_api_key_returns_grounded_fallback(monkeypatch):
+def test_chat_without_api_key_returns_grounded_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(get_settings(), "repos_dir", tmp_path)
+    (tmp_path / "demo").mkdir()
+
     def fake_search(_repository_id: str, _question: str):
         return [
             {

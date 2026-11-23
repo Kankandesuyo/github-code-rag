@@ -9,11 +9,13 @@ from pathlib import Path
 import chromadb
 from chromadb.api.models.Collection import Collection
 from chromadb.config import Settings as ChromaSettings
+from chromadb.errors import NotFoundError
 from rank_bm25 import BM25Okapi
 
 from app.config import get_settings
 from app.services.embedding_service import get_embedding_function, get_embedding_signature
 from app.services.file_parser import DocumentChunk
+from app.services.repository_catalog import RepositoryNotFoundError, resolve_repository_path
 
 
 class VectorStoreError(RuntimeError):
@@ -122,7 +124,8 @@ def make_chunk_id(repository_id: str, chunk: DocumentChunk) -> str:
 
 
 def vector_index_manifest_path(repository_id: str) -> Path:
-    return get_settings().repos_dir / repository_id / VECTOR_INDEX_MANIFEST_DIR / VECTOR_INDEX_MANIFEST_FILE
+    project_path = resolve_repository_path(get_settings().repos_dir, repository_id)
+    return project_path / VECTOR_INDEX_MANIFEST_DIR / VECTOR_INDEX_MANIFEST_FILE
 
 
 def hash_file_chunks(chunks: list[DocumentChunk]) -> str:
@@ -680,11 +683,18 @@ def retrieve_vector_chunks(collection: Collection, queries: list[str], limit: in
 
 def retrieve_relevant_chunks(repository_id: str, question: str | list[str]) -> list[dict]:
     settings = get_settings()
-    collection = get_or_create_collection(repository_id)
     queries = normalize_queries(question)
     primary_query = queries[0] if queries else ""
 
     try:
+        try:
+            collection = get_chroma_client().get_collection(
+                name=get_collection_name(repository_id), embedding_function=get_embedding_function()
+            )
+        except NotFoundError as exc:
+            raise RepositoryNotFoundError("repository index not found") from exc
+        if (collection.metadata or {}).get("repository_id") != repository_id:
+            raise VectorStoreError("index repository mismatch")
         if collection.count() == 0:
             return []
         candidate_k = max(settings.retrieval_candidate_k, settings.retrieval_k)
@@ -694,6 +704,8 @@ def retrieve_relevant_chunks(repository_id: str, question: str | list[str]) -> l
         bm25_sets = [retrieve_bm25_chunks(all_chunks, query, candidate_k) for query in queries]
         bm25_chunks = rrf_fuse(bm25_sets, candidate_k)
         vector_chunks = retrieve_vector_chunks(collection, queries, candidate_k)
+    except RepositoryNotFoundError:
+        raise
     except Exception as exc:
         raise VectorStoreError(f"failed to retrieve chunks: {exc}") from exc
 

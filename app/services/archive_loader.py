@@ -24,6 +24,7 @@ from app.services.file_parser import (
     split_files_into_chunks,
 )
 from app.services.repo_loader import ImportBudget
+from app.services.repository_catalog import InvalidRepositoryIdError, resolve_repository_path
 from app.utils.file_utils import should_ignore_dir, should_ignore_file
 
 
@@ -524,13 +525,11 @@ def _commit_snapshot_and_manifest(
     settings: Settings,
 ) -> None:
     repository_root = settings.repos_dir.resolve()
-    repository_dir = settings.repos_dir / repository_id
-    if (
-        _is_link_or_junction(repository_dir)
-        or repository_dir.resolve().parent != repository_root
-        or _is_link_or_junction(staging_root)
-        or staging_root.resolve().parent != repository_root
-    ):
+    try:
+        repository_dir = resolve_repository_path(settings.repos_dir, repository_id)
+    except InvalidRepositoryIdError as exc:
+        raise ArchiveImportError(ArchiveImportErrorCode.STORAGE_FAILURE) from exc
+    if _is_link_or_junction(staging_root) or staging_root.resolve().parent != repository_root:
         raise ArchiveImportError(ArchiveImportErrorCode.STORAGE_FAILURE)
     repository_dir.mkdir(parents=True, exist_ok=True)
     snapshot_dir = repository_dir / "source_snapshot"

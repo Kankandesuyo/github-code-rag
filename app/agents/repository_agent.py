@@ -4,6 +4,7 @@ import time
 from app.config import get_settings
 from app.schemas.report_schema import AgentLog, RepositoryAnalysis
 from app.services.file_parser import get_language
+from app.services.repository_catalog import resolve_repository_path
 from app.utils.file_utils import should_ignore_dir, should_ignore_file
 
 
@@ -32,7 +33,7 @@ class RepositoryAgent:
     name = "RepositoryAgent"
 
     def resolve_repo_path(self, repository_id: str) -> Path:
-        repo_path = get_settings().repos_dir / repository_id
+        repo_path = resolve_repository_path(get_settings().repos_dir, repository_id)
         if not repo_path.exists() or not repo_path.is_dir():
             raise FileNotFoundError(f"repository not found: {repository_id}")
         snapshot_path = repo_path / "source_snapshot"

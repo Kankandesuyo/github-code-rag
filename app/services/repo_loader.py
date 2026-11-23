@@ -18,6 +18,7 @@ from urllib.request import Request, urlopen
 
 from app.config import get_settings
 from app.services.file_parser import ParsedFile, split_files_into_chunks
+from app.services.repository_catalog import resolve_repository_path
 from app.utils.file_utils import should_ignore_dir, should_ignore_file
 
 
@@ -598,7 +599,7 @@ def save_remote_repository_manifest(
     source: str,
 ) -> None:
     settings = get_settings()
-    manifest_dir = settings.repos_dir / repository_id / ".codebase_agent"
+    manifest_dir = resolve_repository_path(settings.repos_dir, repository_id) / ".codebase_agent"
     manifest_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "source": source,
@@ -616,7 +617,7 @@ def save_remote_repository_manifest(
 
 def save_remote_analysis_snapshot(repository_id: str, files: list[ParsedFile]) -> Path:
     settings = get_settings()
-    repository_dir = settings.repos_dir / repository_id
+    repository_dir = resolve_repository_path(settings.repos_dir, repository_id)
     repository_dir.mkdir(parents=True, exist_ok=True)
     snapshot_dir = repository_dir / REMOTE_ANALYSIS_SNAPSHOT_DIR
     staging_dir = repository_dir / f".{REMOTE_ANALYSIS_SNAPSHOT_DIR}.staging"

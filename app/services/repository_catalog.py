@@ -9,10 +9,11 @@ import shutil
 from typing import Callable
 
 from app.config import get_settings
+from app.utils.repository_ids import REPOSITORY_ID_REGEX
 
 
 logger = logging.getLogger(__name__)
-REPOSITORY_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,140}$")
+REPOSITORY_ID_PATTERN = re.compile(REPOSITORY_ID_REGEX)
 MANIFEST_DIR = ".codebase_agent"
 
 
@@ -26,6 +27,19 @@ class InvalidRepositoryIdError(RepositoryCatalogError):
 
 class RepositoryNotFoundError(RepositoryCatalogError):
     pass
+
+
+def resolve_repository_path(repos_dir: Path, repository_id: str) -> Path:
+    if not REPOSITORY_ID_PATTERN.fullmatch(repository_id):
+        raise InvalidRepositoryIdError("invalid repository_id")
+    root = repos_dir.resolve()
+    candidate = root / repository_id
+    is_junction = getattr(candidate, "is_junction", lambda: False)
+    if candidate.is_symlink() or is_junction():
+        raise InvalidRepositoryIdError("repository path must not be a symlink or junction")
+    if candidate.resolve().parent != root:
+        raise InvalidRepositoryIdError("repository path escapes repository root")
+    return candidate
 
 
 @dataclass(frozen=True)
@@ -66,23 +80,15 @@ class RepositoryCatalogService:
         *,
         vector_cleanup: Callable[[str], int] | None = None,
     ) -> None:
-        self.repos_dir = Path(repos_dir) if repos_dir is not None else get_settings().repos_dir
+        self._repos_dir = Path(repos_dir) if repos_dir is not None else None
         self._vector_cleanup = vector_cleanup
 
-    def _validate_repository_id(self, repository_id: str) -> None:
-        if not REPOSITORY_ID_PATTERN.fullmatch(repository_id):
-            raise InvalidRepositoryIdError("invalid repository_id")
+    @property
+    def repos_dir(self) -> Path:
+        return self._repos_dir if self._repos_dir is not None else get_settings().repos_dir
 
     def _project_path(self, repository_id: str) -> Path:
-        self._validate_repository_id(repository_id)
-        root = self.repos_dir.resolve()
-        candidate = self.repos_dir / repository_id
-        if candidate.is_symlink():
-            raise InvalidRepositoryIdError("repository path must not be a symlink")
-        resolved = candidate.resolve()
-        if resolved.parent != root:
-            raise InvalidRepositoryIdError("repository path escapes repository root")
-        return candidate
+        return resolve_repository_path(self.repos_dir, repository_id)
 
     def _read_json(self, path: Path, repository_id: str) -> dict | None:
         if not path.is_file():
@@ -170,12 +176,15 @@ class RepositoryCatalogService:
         )
 
     def list_repositories(self) -> list[RepositorySummary]:
-        self.repos_dir.mkdir(parents=True, exist_ok=True)
+        if not self.repos_dir.exists():
+            return []
         items: list[RepositorySummary] = []
         for path in self.repos_dir.iterdir():
             if path.name.startswith(".") or not path.is_dir() or path.is_symlink():
                 continue
-            if not REPOSITORY_ID_PATTERN.fullmatch(path.name):
+            try:
+                path = self._project_path(path.name)
+            except InvalidRepositoryIdError:
                 logger.warning("ignored invalid repository directory name=%s", path.name)
                 continue
             items.append(self._summarize(path))

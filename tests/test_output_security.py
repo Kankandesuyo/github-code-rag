@@ -144,8 +144,10 @@ def test_answer_question_wraps_upstream_error_without_raw_detail(monkeypatch, ca
     _assert_no_secret_logged(caplog)
 
 
-def test_chat_llm_error_has_stable_public_message(monkeypatch):
+def test_chat_llm_error_has_stable_public_message(monkeypatch, tmp_path):
     _configure_routes(monkeypatch)
+    monkeypatch.setattr(get_settings(), "repos_dir", tmp_path)
+    (tmp_path / "demo").mkdir()
     monkeypatch.setattr(main.rag_agent, "search", lambda *_args: ([_chunk("safe evidence")], []))
     monkeypatch.setattr(
         main,
@@ -159,8 +161,10 @@ def test_chat_llm_error_has_stable_public_message(monkeypatch):
     _assert_stable_error(response, "answer generation failed")
 
 
-def test_chat_vector_error_has_stable_public_message(monkeypatch):
+def test_chat_vector_error_has_stable_public_message(monkeypatch, tmp_path):
     _configure_routes(monkeypatch)
+    monkeypatch.setattr(get_settings(), "repos_dir", tmp_path)
+    (tmp_path / "demo").mkdir()
     monkeypatch.setattr(
         main.rag_agent,
         "search",
@@ -212,8 +216,10 @@ def test_repository_import_unexpected_error_does_not_log_raw_detail(monkeypatch,
     _assert_no_secret_logged(caplog)
 
 
-def test_chat_unexpected_error_does_not_log_raw_detail(monkeypatch, caplog):
+def test_chat_unexpected_error_does_not_log_raw_detail(monkeypatch, caplog, tmp_path):
     _configure_routes(monkeypatch)
+    monkeypatch.setattr(get_settings(), "repos_dir", tmp_path)
+    (tmp_path / "demo").mkdir()
     monkeypatch.setattr(
         main.rag_agent,
         "search",

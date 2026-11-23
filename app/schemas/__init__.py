@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
+from app.utils.repository_ids import REPOSITORY_ID_REGEX
+
 from app.schemas.report_schema import (
     AgentLog,
     ApiEndpoint,
@@ -66,7 +68,7 @@ class RepositoryDeleteResponse(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    repository_id: str = Field(..., min_length=1, max_length=140, pattern=r"^[A-Za-z0-9_.-]+$")
+    repository_id: str = Field(..., min_length=1, max_length=140, pattern=REPOSITORY_ID_REGEX)
     question: str = Field(..., min_length=1, max_length=4000)
 
 

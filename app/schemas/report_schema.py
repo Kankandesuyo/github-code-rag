@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field
 
+from app.utils.repository_ids import REPOSITORY_ID_REGEX
+
 
 class AgentLog(BaseModel):
     agent: str
@@ -94,7 +96,7 @@ class ProjectReportResponse(BaseModel):
 
 
 class GenerateReadmeRequest(BaseModel):
-    repository_id: str = Field(..., min_length=1, max_length=140, pattern=r"^[A-Za-z0-9_.-]+$")
+    repository_id: str = Field(..., min_length=1, max_length=140, pattern=REPOSITORY_ID_REGEX)
 
 
 class GenerateReadmeResponse(BaseModel):
