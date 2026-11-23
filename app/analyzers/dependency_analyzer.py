@@ -1,9 +1,9 @@
 import ast
 import re
+from contextlib import suppress
 from pathlib import Path
 
 from app.schemas.report_schema import ModuleDependency
-
 
 PYTHON_SUFFIXES = {".py"}
 JAVASCRIPT_SUFFIXES = {".js", ".jsx", ".ts", ".tsx"}
@@ -122,10 +122,8 @@ class DependencyAnalyzer:
                     target = match.group("target")
                     resolved = self.resolve_relative_import(path, target)
                     if resolved != target:
-                        try:
+                        with suppress(ValueError):
                             resolved = Path(resolved).resolve().relative_to(repo_resolved).as_posix()
-                        except ValueError:
-                            pass
                     dependencies.append(
                         ModuleDependency(
                             source_file=relative,

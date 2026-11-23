@@ -22,8 +22,10 @@ QUESTIONS = [
     ("How are query rewrites deduplicated?", {"app/search/query.py"}),
     ("How do I install and start the service with uvicorn?", {"README.md"}),
     ("中文检索怎样切分？多语言嵌入模型如何使用？", {"docs/chinese.md"}),
-    ("Which modules validate login sessions and enforce rate limits?",
-     {"app/security/sessions.py", "app/security/throttle.py"}),
+    (
+        "Which modules validate login sessions and enforce rate limits?",
+        {"app/security/sessions.py", "app/security/throttle.py"},
+    ),
 ]
 
 

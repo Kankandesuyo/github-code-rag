@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import time
+from dataclasses import dataclass
 
+from app.config import get_settings
 from app.schemas.report_schema import AgentLog
 from app.services.file_parser import DocumentChunk
 from app.services.llm_service import build_retrieval_queries, rerank_chunks
@@ -19,7 +20,6 @@ from app.services.vector_store import (
     retrieve_bm25_chunks,
     rrf_fuse,
 )
-from app.config import get_settings
 
 
 @dataclass(frozen=True)

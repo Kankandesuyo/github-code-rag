@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 REMOTE_CHROMA_CLIENTS = frozenset({"HttpClient", "AsyncHttpClient", "CloudClient"})
 REMOTE_CHROMA_STRINGS = (
     "/api/v2",
@@ -71,9 +70,7 @@ def find_chroma_remote_surfaces(source: str) -> list[str]:
             continue
         called = _dotted_name(node.func)
         called_parts = called.split(".")
-        if called in remote_client_aliases:
-            findings.append(f"remote client call: {called}")
-        elif (
+        if called in remote_client_aliases or (
             len(called_parts) >= 2
             and called_parts[0] in chroma_module_aliases
             and called_parts[-1] in REMOTE_CHROMA_CLIENTS
@@ -145,16 +142,19 @@ def exercise_chroma_runtime(*, tmp_path: Path, monkeypatch):
 
 def test_audit_gate_has_only_reviewed_future_dated_waivers():
     run_pip_audit = load_gate()
-    assert run_pip_audit.ALLOWED_WAIVERS == frozenset(
-        {
-            "PYSEC-2026-311",
-            "CVE-2026-45830",
-            "CVE-2026-45831",
-            "CVE-2026-45833",
-        }
+    assert (
+        frozenset(
+            {
+                "PYSEC-2026-311",
+                "CVE-2026-45830",
+                "CVE-2026-45831",
+                "CVE-2026-45833",
+            }
+        )
+        == run_pip_audit.ALLOWED_WAIVERS
     )
-    assert run_pip_audit.WAIVER_EXPIRES_ON == date(2026, 10, 1)
-    assert run_pip_audit.WAIVER_EXPIRES_ON > date(2026, 9, 1)
+    assert date(2026, 10, 1) == run_pip_audit.WAIVER_EXPIRES_ON
+    assert date(2026, 9, 1) < run_pip_audit.WAIVER_EXPIRES_ON
 
 
 def test_audit_gate_applies_waiver_only_before_expiry():
@@ -184,9 +184,7 @@ def test_audit_gate_propagates_runner_exit_code():
 
 
 def test_chroma_advisory_attack_surfaces_are_not_exposed():
-    source = "\n".join(
-        path.read_text(encoding="utf-8") for path in Path("app").rglob("*.py")
-    )
+    source = "\n".join(path.read_text(encoding="utf-8") for path in Path("app").rglob("*.py"))
 
     assert "chromadb.HttpClient" not in source
     assert "chromadb.server.fastapi" not in source
@@ -212,8 +210,7 @@ def test_all_chroma_collection_creation_supplies_owned_embedding_function():
 
 def test_chroma_waiver_rationale_and_removal_conditions_are_documented():
     documents = "\n".join(
-        Path(path).read_text(encoding="utf-8")
-        for path in ("README.md", "SECURITY_LOG.md", "UPDATE_README.md")
+        Path(path).read_text(encoding="utf-8") for path in ("README.md", "SECURITY_LOG.md", "UPDATE_README.md")
     )
 
     for required_text in (
@@ -275,8 +272,7 @@ def test_remote_surface_detector_allows_local_persistent_client():
 
 def test_application_ast_has_no_chroma_remote_or_server_surface():
     violations = {
-        str(path): find_chroma_remote_surfaces(path.read_text(encoding="utf-8"))
-        for path in Path("app").rglob("*.py")
+        str(path): find_chroma_remote_surfaces(path.read_text(encoding="utf-8")) for path in Path("app").rglob("*.py")
     }
 
     assert {path: findings for path, findings in violations.items() if findings} == {}
@@ -301,15 +297,11 @@ def test_settings_expose_only_local_chroma_configuration():
     assert chroma_fields == {"chroma_dir", "chroma_anonymized_telemetry"}
 
 
-def test_runtime_constructs_only_persistent_client_in_temporary_directory(
-    tmp_path, monkeypatch
-):
+def test_runtime_constructs_only_persistent_client_in_temporary_directory(tmp_path, monkeypatch):
     client, calls = exercise_chroma_runtime(tmp_path=tmp_path, monkeypatch=monkeypatch)
 
     assert client is calls["persistent_result"]
-    assert calls["persistent"] == [
-        {"path": str(tmp_path / "chroma"), "settings": calls["chroma_settings"]}
-    ]
+    assert calls["persistent"] == [{"path": str(tmp_path / "chroma"), "settings": calls["chroma_settings"]}]
     assert calls["remote"] == []
 
 

@@ -1,13 +1,16 @@
 import ast
+import logging
 import re
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-import zipfile
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import get_settings
 from app.utils.file_utils import safe_relative_path, should_ignore_dir, should_ignore_file
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -162,18 +165,12 @@ def office_container_is_within_limits(path: Path) -> bool:
                 if entry.file_size:
                     if entry.compress_size <= 0:
                         return False
-                    if (
-                        entry.file_size / entry.compress_size
-                        > settings.max_document_compression_ratio
-                    ):
+                    if entry.file_size / entry.compress_size > settings.max_document_compression_ratio:
                         return False
             if total_uncompressed:
                 if total_compressed <= 0:
                     return False
-                if (
-                    total_uncompressed / total_compressed
-                    > settings.max_document_compression_ratio
-                ):
+                if total_uncompressed / total_compressed > settings.max_document_compression_ratio:
                     return False
     except (OSError, RuntimeError, zipfile.BadZipFile, zipfile.LargeZipFile):
         return False
@@ -199,7 +196,8 @@ def read_pdf_content(path: Path) -> str | None:
             if extracted_characters > settings.max_document_extracted_characters:
                 return None
             pages.append(content)
-    except Exception:
+    except Exception as exc:
+        logger.debug("could not parse PDF error_type=%s", type(exc).__name__)
         return None
     return "\n\n".join(page.strip() for page in pages if page.strip()) or None
 
@@ -236,7 +234,8 @@ def read_docx_content(path: Path) -> str | None:
                     if extracted_characters > settings.max_document_extracted_characters:
                         return None
                     table_rows.append(content)
-    except Exception:
+    except Exception as exc:
+        logger.debug("could not parse DOCX error_type=%s", type(exc).__name__)
         return None
     return "\n".join(paragraphs + table_rows).strip() or None
 
@@ -265,10 +264,7 @@ def read_xlsx_content(path: Path) -> str | None:
             for row in sheet.iter_rows(values_only=True):
                 total_rows += 1
                 total_cells += len(row)
-                if (
-                    total_rows > settings.max_document_rows
-                    or total_cells > settings.max_document_cells
-                ):
+                if total_rows > settings.max_document_rows or total_cells > settings.max_document_cells:
                     return None
                 values = [str(value).strip() for value in row if value is not None and str(value).strip()]
                 if values:
@@ -279,7 +275,8 @@ def read_xlsx_content(path: Path) -> str | None:
                     rows.append(content)
             if len(rows) > 1:
                 sections.append("\n".join(rows))
-    except Exception:
+    except Exception as exc:
+        logger.debug("could not parse XLSX error_type=%s", type(exc).__name__)
         return None
     finally:
         if workbook is not None:
@@ -328,9 +325,7 @@ def read_repository_files(repo_path: Path) -> list[ParsedFile]:
             continue
 
         if content.strip():
-            parsed_files.append(
-                ParsedFile(file_path=safe_relative_path(path, repo_path), content=content)
-            )
+            parsed_files.append(ParsedFile(file_path=safe_relative_path(path, repo_path), content=content))
             total_bytes += size
 
     return parsed_files
@@ -502,7 +497,9 @@ CODE_BLOCK_PATTERNS = {
         re.MULTILINE,
     ),
     "java": re.compile(
-        r"^\s*((public|private|protected|static|final|abstract)\s+)*(class|interface|enum)\s+([A-Za-z_][\w]*)|^\s*((public|private|protected|static|final|synchronized)\s+)+[\w<>\[\], ?]+\s+([A-Za-z_][\w]*)\s*\(",
+        r"^\s*((public|private|protected|static|final|abstract)\s+)*(class|interface|enum)\s+([A-Za-z_][\w]*)"
+        r"|^\s*((public|private|protected|static|final|synchronized)\s+)+"
+        r"[\w<>\[\], ?]+\s+([A-Za-z_][\w]*)\s*\(",
         re.MULTILINE,
     ),
     "go": re.compile(
@@ -514,7 +511,8 @@ CODE_BLOCK_PATTERNS = {
         re.MULTILINE,
     ),
     "c": re.compile(
-        r"^\s*((static|inline|extern)\s+)*[\w\*\s]+\s+([A-Za-z_][\w]*)\s*\([^;]*\)\s*\{|^\s*(typedef\s+)?struct\s+([A-Za-z_][\w]*)?",
+        r"^\s*((static|inline|extern)\s+)*[\w\*\s]+\s+([A-Za-z_][\w]*)\s*\([^;]*\)\s*\{"
+        r"|^\s*(typedef\s+)?struct\s+([A-Za-z_][\w]*)?",
         re.MULTILINE,
     ),
     "cpp": re.compile(
@@ -522,7 +520,9 @@ CODE_BLOCK_PATTERNS = {
         re.MULTILINE,
     ),
     "csharp": re.compile(
-        r"^\s*((public|private|protected|internal|static|sealed|abstract|async)\s+)*(class|interface|enum|struct|record)\s+([A-Za-z_][\w]*)|^\s*((public|private|protected|internal|static|async|virtual|override)\s+)+[\w<>\[\], ?]+\s+([A-Za-z_][\w]*)\s*\(",
+        r"^\s*((public|private|protected|internal|static|sealed|abstract|async)\s+)*(class|interface|enum|struct|record)\s+([A-Za-z_][\w]*)"
+        r"|^\s*((public|private|protected|internal|static|async|virtual|override)\s+)+"
+        r"[\w<>\[\], ?]+\s+([A-Za-z_][\w]*)\s*\(",
         re.MULTILINE,
     ),
     "php": re.compile(
@@ -679,7 +679,9 @@ def split_files_into_chunks(files: list[ParsedFile], repository_id: str) -> list
             file_chunks = split_fallback_file(parsed_file, repository_id, language)
 
         for chunk in file_chunks:
-            chunk.metadata["chunk_index"] = len([item for item in chunks if item.metadata["file_path"] == parsed_file.file_path])
+            chunk.metadata["chunk_index"] = len(
+                [item for item in chunks if item.metadata["file_path"] == parsed_file.file_path]
+            )
             chunks.append(chunk)
 
     return chunks

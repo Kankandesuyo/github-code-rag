@@ -88,8 +88,7 @@ def get_embedding_function():
     if provider in {"sentence_transformers", "sentence-transformers", "local"}:
         return SentenceTransformerEmbeddingFunction(settings.embedding_model_name)
     raise EmbeddingConfigurationError(
-        f"Unsupported EMBEDDING_PROVIDER={settings.embedding_provider!r}. "
-        "Use `sentence_transformers` or `hash`."
+        f"Unsupported EMBEDDING_PROVIDER={settings.embedding_provider!r}. Use `sentence_transformers` or `hash`."
     )
 
 
@@ -97,5 +96,5 @@ def get_embedding_signature() -> str:
     settings = get_settings()
     provider = settings.embedding_provider.lower().strip()
     model = settings.embedding_model_name if provider != "hash" else str(settings.hash_embedding_dimensions)
-    digest = hashlib.sha1(f"{provider}:{model}".encode("utf-8")).hexdigest()[:8]
+    digest = hashlib.sha1(f"{provider}:{model}".encode()).hexdigest()[:8]
     return f"{provider.replace('-', '_')}_{digest}"

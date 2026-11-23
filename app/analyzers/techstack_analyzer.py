@@ -4,7 +4,6 @@ from pathlib import Path
 
 from app.schemas.report_schema import TechStackResult
 
-
 STACK_RULES = {
     "backend": {
         "Python": ["python"],
@@ -112,7 +111,10 @@ class TechStackAnalyzer:
         }
         for category, rules in STACK_RULES.items():
             for label, needles in rules.items():
-                if any(re.search(rf"(^|[^a-z0-9_\-]){re.escape(needle)}([^a-z0-9_\-]|$)", signal_text) for needle in needles):
+                if any(
+                    re.search(rf"(^|[^a-z0-9_\-]){re.escape(needle)}([^a-z0-9_\-]|$)", signal_text)
+                    for needle in needles
+                ):
                     detected[category].append(label)
 
         if "python" not in detected["backend"] and re.search(r"\.py\b|python", signal_text):

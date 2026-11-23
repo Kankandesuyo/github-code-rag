@@ -1,14 +1,14 @@
-from pathlib import Path
-from collections import deque
-from contextlib import aclosing, asynccontextmanager
 import asyncio
 import hashlib
 import json
 import logging
 import secrets
+import time
+from collections import deque
+from contextlib import aclosing, asynccontextmanager
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import BoundedSemaphore, Lock
-import time
 from typing import Annotated
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -22,22 +22,6 @@ from starlette.requests import ClientDisconnect
 
 from app.agents.rag_agent import RAGAgent
 from app.config import get_settings
-from app.security.auth import (
-    SESSION_COOKIE_NAME,
-    AuthConfigurationError,
-    LoginRequest,
-    authorize_request,
-    check_login_rate_limit,
-    clear_login_attempts,
-    create_session_token,
-    decode_session_token,
-    ensure_auth_ready,
-    ensure_deployment_security,
-    is_auth_enabled,
-    record_failed_login,
-    verify_password,
-)
-from app.security.audit import write_security_audit
 from app.schemas import (
     AgentLog,
     ChatRequest,
@@ -55,6 +39,29 @@ from app.schemas import (
     RepositorySummaryResponse,
     Source,
 )
+from app.security.audit import write_security_audit
+from app.security.auth import (
+    SESSION_COOKIE_NAME,
+    AuthConfigurationError,
+    LoginRequest,
+    authorize_request,
+    check_login_rate_limit,
+    clear_login_attempts,
+    create_session_token,
+    decode_session_token,
+    ensure_auth_ready,
+    ensure_deployment_security,
+    is_auth_enabled,
+    record_failed_login,
+    verify_password,
+)
+from app.services.archive_loader import (
+    ArchiveImportError,
+    ArchiveImportErrorCode,
+    decode_archive_name,
+    load_zip_repository,
+    validate_archive_content_type,
+)
 from app.services.llm_service import (
     LLMServiceError,
     answer_question,
@@ -64,14 +71,6 @@ from app.services.llm_service import (
     stream_answer_question,
 )
 from app.services.online_search import search_online_repository
-from app.services.archive_loader import (
-    ArchiveImportError,
-    ArchiveImportErrorCode,
-    decode_archive_name,
-    load_zip_repository,
-    validate_archive_content_type,
-)
-from app.services.report_service import ReportService
 from app.services.repo_loader import (
     COMMIT_SHA_PATTERN,
     ImportBudget,
@@ -79,6 +78,7 @@ from app.services.repo_loader import (
     activate_import_budget,
     load_repository,
 )
+from app.services.report_service import ReportService
 from app.services.repository_catalog import (
     InvalidRepositoryIdError,
     RepositoryCatalogService,
@@ -94,7 +94,6 @@ from app.services.vector_store import (
     index_chunks_incremental,
     retrieve_relevant_chunks,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -152,16 +151,11 @@ def build_https_redirect_url(request: Request, public_base_url: str) -> str:
     parsed_base_url = urlsplit(public_base_url.strip())
     base_path = parsed_base_url.path.rstrip("/")
     raw_path = request.scope.get("raw_path")
-    if isinstance(raw_path, bytes):
-        request_path = raw_path.decode("ascii")
-    else:
-        request_path = request.url.path
+    request_path = raw_path.decode("ascii") if isinstance(raw_path, bytes) else request.url.path
     if not request_path.startswith("/"):
         request_path = f"/{request_path}"
     redirect_path = f"{base_path}{request_path}" or "/"
-    return urlunsplit(
-        ("https", parsed_base_url.netloc, redirect_path, request.url.query, "")
-    )
+    return urlunsplit(("https", parsed_base_url.netloc, redirect_path, request.url.query, ""))
 
 
 @app.middleware("http")
@@ -267,9 +261,7 @@ async def stream_zip_request_to_file(
         try:
             content_length = int(raw_content_length)
         except ValueError as exc:
-            raise ArchiveImportError(
-                ArchiveImportErrorCode.INVALID_CONTENT_LENGTH
-            ) from exc
+            raise ArchiveImportError(ArchiveImportErrorCode.INVALID_CONTENT_LENGTH) from exc
         if content_length < 0:
             raise ArchiveImportError(ArchiveImportErrorCode.INVALID_CONTENT_LENGTH)
         if content_length > max_upload_bytes:
@@ -285,9 +277,7 @@ async def stream_zip_request_to_file(
                         continue
                     total_bytes += len(chunk)
                     if total_bytes > max_upload_bytes:
-                        raise ArchiveImportError(
-                            ArchiveImportErrorCode.UPLOAD_TOO_LARGE
-                        )
+                        raise ArchiveImportError(ArchiveImportErrorCode.UPLOAD_TOO_LARGE)
                     digest.update(chunk)
                     handle.write(chunk)
                     budget.check_deadline()
@@ -723,9 +713,7 @@ def chat_repository(repository_id: str) -> RepositorySummary:
 
 
 def retrieve_chat_evidence(request: ChatRequest) -> tuple[list[dict], list[AgentLog]]:
-    previous_question = next(
-        (item.content for item in reversed(request.history) if item.role == "user"), ""
-    )
+    previous_question = next((item.content for item in reversed(request.history) if item.role == "user"), "")
     query = request.question
     if previous_question:
         query += f"\n此前问题：{redact_sensitive_text(previous_question)}"
@@ -818,14 +806,19 @@ def chat_stream(request: ChatRequest) -> ChatStreamResponse:
                 yield sse_event("delta", {"text": CHAT_NO_EVIDENCE})
             else:
                 writer_started = time.perf_counter()
-                async with aclosing(stream_answer_question(request.question, chunks, history=request.history)) as stream:
+                async with aclosing(
+                    stream_answer_question(request.question, chunks, history=request.history)
+                ) as stream:
                     async for delta in stream:
                         yield sse_event("delta", {"text": delta})
                 logs = [*logs, answer_log(writer_started)]
-            yield sse_event("done", {
-                "sources": [source.model_dump() for source in sources],
-                "logs": [log.model_dump() for log in logs],
-            })
+            yield sse_event(
+                "done",
+                {
+                    "sources": [source.model_dump() for source in sources],
+                    "logs": [log.model_dump() for log in logs],
+                },
+            )
         except HTTPException as exc:
             yield sse_event("error", {"message": exc.detail})
         except LLMServiceError:
@@ -867,7 +860,9 @@ def repository_generate_readme(request: GenerateReadmeRequest) -> GenerateReadme
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
-        logger.error("README generation failed repository_id=%s error_type=%s", request.repository_id, type(exc).__name__)
+        logger.error(
+            "README generation failed repository_id=%s error_type=%s", request.repository_id, type(exc).__name__
+        )
         raise HTTPException(status_code=500, detail="README generation failed") from exc
 
 

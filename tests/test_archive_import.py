@@ -1,16 +1,15 @@
+import json
+import stat
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-import json
-from pathlib import Path
 from threading import Event
-import stat
 from urllib.parse import quote
-import zipfile
 
+import pytest
 from docx import Document
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
-import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
@@ -93,13 +92,7 @@ def make_pdf_bytes() -> bytes:
             NameObject("/BaseFont"): NameObject("/Helvetica"),
         }
     )
-    resources = DictionaryObject(
-        {
-            NameObject("/Font"): DictionaryObject(
-                {NameObject("/F1"): writer._add_object(font)}
-            )
-        }
-    )
+    resources = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): writer._add_object(font)})})
     stream = DecodedStreamObject()
     stream.set_data(b"BT /F1 12 Tf 40 250 Td (Searchable archive PDF) Tj ET")
     page[NameObject("/Resources")] = resources
@@ -138,15 +131,9 @@ def mark_first_entry_encrypted(data: bytes) -> bytes:
     central_header = payload.find(b"PK\x01\x02")
     assert local_header >= 0 and central_header >= 0
     local_flags = int.from_bytes(payload[local_header + 6 : local_header + 8], "little")
-    central_flags = int.from_bytes(
-        payload[central_header + 8 : central_header + 10], "little"
-    )
-    payload[local_header + 6 : local_header + 8] = (local_flags | 0x1).to_bytes(
-        2, "little"
-    )
-    payload[central_header + 8 : central_header + 10] = (
-        central_flags | 0x1
-    ).to_bytes(2, "little")
+    central_flags = int.from_bytes(payload[central_header + 8 : central_header + 10], "little")
+    payload[local_header + 6 : local_header + 8] = (local_flags | 0x1).to_bytes(2, "little")
+    payload[central_header + 8 : central_header + 10] = (central_flags | 0x1).to_bytes(2, "little")
     return bytes(payload)
 
 
@@ -213,11 +200,7 @@ def test_zip_upload_indexes_code_and_documents_and_saves_safe_snapshot(
     assert not (snapshot / "config" / "secrets.json").exists()
     assert not (snapshot / "nested.zip").exists()
 
-    manifest = json.loads(
-        (repository_dir / ".codebase_agent" / "source_manifest.json").read_text(
-            encoding="utf-8"
-        )
-    )
+    manifest = json.loads((repository_dir / ".codebase_agent" / "source_manifest.json").read_text(encoding="utf-8"))
     assert manifest["source"] == "zip_upload"
     assert manifest["source_type"] == "zip_upload"
     assert manifest["source_name"] == "课程资料.zip"
@@ -242,14 +225,9 @@ def test_zip_upload_indexes_code_and_documents_and_saves_safe_snapshot(
     assert summary.files_indexed == 5
 
     audit_events = [
-        json.loads(line)
-        for line in settings.security_audit_log_path.read_text(
-            encoding="utf-8"
-        ).splitlines()
+        json.loads(line) for line in settings.security_audit_log_path.read_text(encoding="utf-8").splitlines()
     ]
-    assert [(event["event"], event["outcome"]) for event in audit_events] == [
-        ("repository_import", "success")
-    ]
+    assert [(event["event"], event["outcome"]) for event in audit_events] == [("repository_import", "success")]
     serialized_audit = settings.security_audit_log_path.read_text(encoding="utf-8")
     assert "课程资料.zip" not in serialized_audit
     assert "must-not-index" not in serialized_audit
@@ -279,9 +257,7 @@ def test_zip_upload_rejects_unsafe_paths_without_disclosure(
         response = upload_zip(client, payload)
 
     assert response.status_code == 400
-    assert response.json() == {
-        "detail": "ZIP archive contains an unsafe entry path"
-    }
+    assert response.json() == {"detail": "ZIP archive contains an unsafe entry path"}
     assert entry_name not in response.text
     assert "private-body-marker" not in response.text
     assert not (tmp_path / "escape.py").exists()
@@ -296,9 +272,7 @@ def test_zip_upload_rejects_unsafe_paths_without_disclosure(
             "ZIP archive contains a symbolic link or special file",
         ),
         (
-            lambda: mark_first_entry_encrypted(
-                make_zip({"README.md": "# encrypted marker"})
-            ),
+            lambda: mark_first_entry_encrypted(make_zip({"README.md": "# encrypted marker"})),
             "encrypted ZIP archives are not supported",
         ),
     ],
@@ -375,9 +349,7 @@ def test_zip_upload_rejects_high_compression_ratio(tmp_path, monkeypatch):
         response = upload_zip(client, payload)
 
     assert response.status_code == 413
-    assert response.json() == {
-        "detail": "ZIP archive exceeds the configured compression-ratio limit"
-    }
+    assert response.json() == {"detail": "ZIP archive exceeds the configured compression-ratio limit"}
 
 
 def test_zip_upload_counts_streamed_bytes_even_with_false_content_length(
@@ -396,9 +368,7 @@ def test_zip_upload_counts_streamed_bytes_even_with_false_content_length(
         )
 
     assert response.status_code == 413
-    assert response.json() == {
-        "detail": "ZIP upload exceeds the configured size limit"
-    }
+    assert response.json() == {"detail": "ZIP upload exceeds the configured size limit"}
 
 
 def test_zip_upload_requires_content_type_and_safe_decoded_name(
@@ -427,13 +397,9 @@ def test_zip_upload_requires_content_type_and_safe_decoded_name(
         )
 
     assert wrong_type.status_code == 415
-    assert wrong_type.json() == {
-        "detail": "Content-Type must be application/zip"
-    }
+    assert wrong_type.json() == {"detail": "Content-Type must be application/zip"}
     assert unsafe_name.status_code == 400
-    assert unsafe_name.json() == {
-        "detail": "X-Archive-Name must be a valid ZIP filename"
-    }
+    assert unsafe_name.json() == {"detail": "X-Archive-Name must be a valid ZIP filename"}
 
 
 def test_zip_upload_requires_csrf_for_browser_session(tmp_path, monkeypatch):
@@ -484,9 +450,7 @@ def test_zip_upload_reuses_global_import_slot(tmp_path, monkeypatch):
         try:
             second = upload_zip(client, payload, name="other.zip")
             assert second.status_code == 429
-            assert second.json() == {
-                "detail": "repository import capacity reached"
-            }
+            assert second.json() == {"detail": "repository import capacity reached"}
         finally:
             release.set()
 

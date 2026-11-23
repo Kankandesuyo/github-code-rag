@@ -3,7 +3,6 @@ from pathlib import Path
 
 from app.schemas.report_schema import EntrypointFinding
 
-
 STARTUP_ENTRY_NAMES = {"main.py", "app.py", "manage.py", "server.js", "server.ts", "index.js", "index.ts"}
 CONFIG_ENTRY_NAMES = {
     ".env",
@@ -37,15 +36,29 @@ class EntrypointAnalyzer:
         content = self.read_text_file(path)
 
         if name in STARTUP_ENTRY_NAMES or relative in {"app/main.py", "src/index.js", "src/index.ts"}:
-            findings.append(EntrypointFinding(kind="startup", file_path=relative, reason=f"recognized entry filename `{name}`"))
+            findings.append(
+                EntrypointFinding(kind="startup", file_path=relative, reason=f"recognized entry filename `{name}`")
+            )
 
         if path.suffix == ".py" and re.search(r"\b(FastAPI|Flask)\s*\(", content):
-            findings.append(EntrypointFinding(kind="application", file_path=relative, reason="creates a Python web application object"))
+            findings.append(
+                EntrypointFinding(
+                    kind="application", file_path=relative, reason="creates a Python web application object"
+                )
+            )
         if path.suffix.lower() in {".js", ".ts"} and re.search(r"\b(express\(\)|createServer|app\.listen)\b", content):
-            findings.append(EntrypointFinding(kind="application", file_path=relative, reason="creates or starts a Node web application"))
+            findings.append(
+                EntrypointFinding(
+                    kind="application", file_path=relative, reason="creates or starts a Node web application"
+                )
+            )
 
         if name in CONFIG_ENTRY_NAMES or relative in CONFIG_ENTRY_NAMES:
-            findings.append(EntrypointFinding(kind="configuration", file_path=relative, reason=f"recognized configuration file `{name}`"))
+            findings.append(
+                EntrypointFinding(
+                    kind="configuration", file_path=relative, reason=f"recognized configuration file `{name}`"
+                )
+            )
 
         return findings
 

@@ -1,12 +1,12 @@
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from app.agents.repository_agent import RepositoryAgent
 from app.schemas.report_schema import AgentLog
 from app.utils.atomic_files import atomic_write_json
-
 
 MANIFEST_VERSION = 4
 MANIFEST_DIR_NAME = ".codebase_agent"

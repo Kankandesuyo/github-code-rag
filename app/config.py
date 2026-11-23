@@ -5,15 +5,12 @@ from typing import Annotated
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-
 DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "testserver")
 
 
 class Settings(BaseSettings):
     deployment_mode: str = "local"
-    allowed_hosts: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: list(DEFAULT_ALLOWED_HOSTS)
-    )
+    allowed_hosts: Annotated[list[str], NoDecode] = Field(default_factory=lambda: list(DEFAULT_ALLOWED_HOSTS))
     public_base_url: str = "https://localhost"
 
     deepseek_api_key: str = ""

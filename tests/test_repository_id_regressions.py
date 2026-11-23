@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -33,7 +31,7 @@ def isolated_repository_api(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("repository_id", [".", "..", ".hidden", "outside-link"])
-def test_repository_routes_reject_unsafe_paths(isolated_repository_api, repository_id, monkeypatch):
+def test_repository_routes_reject_unsafe_paths(isolated_repository_api, repository_id, link_directory):
     client, root = isolated_repository_api
     outside = root.parent / "outside"
     outside.mkdir()
@@ -41,14 +39,7 @@ def test_repository_routes_reject_unsafe_paths(isolated_repository_api, reposito
     marker.write_text("keep", encoding="utf-8")
     (root / ".hidden").mkdir()
     if repository_id == "outside-link":
-        link = root / repository_id
-        try:
-            link.symlink_to(outside, target_is_directory=True)
-        except OSError:
-            # Windows can prohibit link creation for unprivileged test processes.
-            link.mkdir()
-            original_is_symlink = Path.is_symlink
-            monkeypatch.setattr(Path, "is_symlink", lambda path: path == link or original_is_symlink(path))
+        link_directory(root / repository_id, outside)
 
     for route in ("/chat", "/repository/generate-readme", "/debug/retrieval"):
         response = client.post(route, json={"repository_id": repository_id, "question": "describe"})
@@ -68,8 +59,10 @@ def test_missing_repository_and_index_do_not_create_collection(isolated_reposito
     payload = {"repository_id": "missing", "question": "describe"}
 
     with monkeypatch.context() as patch:
+
         def unexpected_search(*_args):
             pytest.fail("missing repositories must be rejected before retrieval")
+
         patch.setattr(rag_agent, "search", unexpected_search)
         assert client.post("/chat", json=payload).status_code == 404
 

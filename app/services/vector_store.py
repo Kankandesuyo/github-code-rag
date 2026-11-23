@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import math
 import re
 from collections import Counter, OrderedDict
@@ -20,6 +21,8 @@ from app.services.embedding_service import get_embedding_function, get_embedding
 from app.services.file_parser import DocumentChunk
 from app.services.repository_catalog import RepositoryNotFoundError, resolve_repository_path
 from app.utils.atomic_files import atomic_write_json
+
+logger = logging.getLogger(__name__)
 
 
 class VectorStoreError(RuntimeError):
@@ -139,8 +142,10 @@ def recreate_collection(repository_id: str) -> Collection:
     collection_name = get_collection_name(repository_id)
     try:
         client.delete_collection(collection_name)
-    except Exception:
-        pass
+    except NotFoundError:
+        logger.debug("no existing collection to replace repository_id=%s", repository_id)
+    except Exception as exc:
+        raise VectorStoreError("failed to replace repository vector collection") from exc
     return client.get_or_create_collection(
         name=collection_name,
         embedding_function=get_embedding_function(),
@@ -342,11 +347,7 @@ def _index_chunks_incremental(repository_id: str, chunks: list[DocumentChunk]) -
         collection.delete(ids=delete_ids)
 
     grouped_chunks = group_chunks_by_file(chunks)
-    chunks_to_add = [
-        chunk
-        for file_path in changed_files
-        for chunk in grouped_chunks.get(file_path, [])
-    ]
+    chunks_to_add = [chunk for file_path in changed_files for chunk in grouped_chunks.get(file_path, [])]
     chunks_written = add_chunks_to_collection(collection, repository_id, chunks_to_add)
     save_vector_index_manifest(repository_id, current_manifest)
     return IndexResult(
@@ -367,12 +368,13 @@ def tokenize_text(text: str) -> list[str]:
     tokens = []
     for token in TOKEN_PATTERN.findall(text.lower()):
         if HAN_TEXT_PATTERN.fullmatch(token):
-            tokens.extend(token[index:index + 2] for index in range(len(token) - 1))
+            tokens.extend(token[index : index + 2] for index in range(len(token) - 1))
         else:
             tokens.append(token)
             if "_" in token:
                 tokens.extend(part for part in token.split("_") if part)
     return tokens
+
 
 def expand_query_keywords(question: str) -> set[str]:
     question_lower = question.lower()
@@ -455,7 +457,9 @@ def expand_query_keywords(question: str) -> set[str]:
 def detect_query_intents(question: str) -> set[str]:
     question_lower = question.lower()
     intents: set[str] = set()
-    if any(trigger in question_lower for trigger in ("启动", "运行", "部署", "安装", "start", "run", "install", "deploy")):
+    if any(
+        trigger in question_lower for trigger in ("启动", "运行", "部署", "安装", "start", "run", "install", "deploy")
+    ):
         intents.add("startup")
     if any(
         trigger in question_lower
@@ -524,14 +528,13 @@ def get_all_collection_chunks(collection: Collection, repository_id: str) -> lis
             "metadata": metadata,
             "distance": 0.0,
         }
-        for document, metadata in zip(documents, metadatas)
+        for document, metadata in zip(documents, metadatas, strict=True)
     ]
 
 
 def build_lexical_index(chunks: list[dict]) -> LexicalIndex:
     tokenized_documents = [
-        tokenize_text(f"{chunk['metadata'].get('file_path', '')} {chunk['content']}")
-        for chunk in chunks
+        tokenize_text(f"{chunk['metadata'].get('file_path', '')} {chunk['content']}") for chunk in chunks
     ]
     if not any(tokenized_documents):
         return LexicalIndex(chunks, None)
@@ -630,7 +633,13 @@ def retrieve_anchor_chunks(all_chunks: list[dict], question: str, limit: int) ->
             }
         )
 
-    anchors.sort(key=lambda item: (item["metadata"]["file_path"].lower() != "readme.md", item["metadata"]["file_path"], item["metadata"]["chunk_index"]))
+    anchors.sort(
+        key=lambda item: (
+            item["metadata"]["file_path"].lower() != "readme.md",
+            item["metadata"]["file_path"],
+            item["metadata"]["chunk_index"],
+        )
+    )
     return anchors[:limit]
 
 
@@ -675,10 +684,7 @@ def expand_neighbor_chunks(selected_chunks: list[dict], all_chunks: list[dict], 
     if window <= 0:
         return selected_chunks
 
-    by_key = {
-        (chunk["metadata"]["file_path"], int(chunk["metadata"]["chunk_index"])): chunk
-        for chunk in all_chunks
-    }
+    by_key = {(chunk["metadata"]["file_path"], int(chunk["metadata"]["chunk_index"])): chunk for chunk in all_chunks}
     expanded: list[dict] = []
     seen: set[tuple[str, int]] = set()
 
@@ -720,7 +726,7 @@ def retrieve_vector_chunks(collection: Collection, queries: list[str], limit: in
                     "metadata": metadata,
                     "distance": distance,
                 }
-                for document, metadata, distance in zip(documents, metadatas, distances)
+                for document, metadata, distance in zip(documents, metadatas, distances, strict=True)
             ]
         )
     return rrf_fuse(result_sets, limit)

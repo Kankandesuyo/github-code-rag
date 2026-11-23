@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ALLOWED_EXTENSIONS = {
     ".py",
     ".js",

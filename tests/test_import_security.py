@@ -117,9 +117,7 @@ def test_import_budget_caps_configured_timeout_to_remaining_seconds():
 
 
 @pytest.mark.parametrize("request_kind", ["api_json", "web_bytes"])
-def test_outbound_request_caps_socket_timeout_and_rejects_expiry_after_read(
-    monkeypatch, request_kind
-):
+def test_outbound_request_caps_socket_timeout_and_rejects_expiry_after_read(monkeypatch, request_kind):
     now = [100.0]
     budget = ImportBudget(
         max_requests=10,
@@ -151,9 +149,7 @@ def test_outbound_request_caps_socket_timeout_and_rejects_expiry_after_read(
     assert observed_timeouts == [pytest.approx(3.0)]
 
 
-def test_api_rate_limit_fallback_shares_budget_across_api_html_and_raw_requests(
-    tmp_path, monkeypatch
-):
+def test_api_rate_limit_fallback_shares_budget_across_api_html_and_raw_requests(tmp_path, monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "repos_dir", tmp_path)
     page = b'<a href="/openai/codex/blob/main/README.md">README.md</a>'
@@ -216,9 +212,11 @@ def test_load_repository_reuses_outer_budget_through_chunk_split(tmp_path, monke
     monkeypatch.setattr(repo_loader, "save_remote_analysis_snapshot", lambda *_args: tmp_path)
     monkeypatch.setattr(repo_loader, "split_files_into_chunks", fake_split)
 
-    with repo_loader.activate_import_budget(budget):
-        with pytest.raises(RepositoryLoadError, match="^repository import deadline exceeded$"):
-            repo_loader.load_repository("https://github.com/example/demo")
+    with (
+        repo_loader.activate_import_budget(budget),
+        pytest.raises(RepositoryLoadError, match="^repository import deadline exceeded$"),
+    ):
+        repo_loader.load_repository("https://github.com/example/demo")
 
 
 def test_repository_load_returns_429_while_import_slot_is_busy(monkeypatch):
@@ -291,9 +289,7 @@ def test_repository_load_keeps_import_slot_while_vector_index_is_running(monkeyp
 
 
 @pytest.mark.parametrize("expiry_stage", ["before_index", "after_index"])
-def test_repository_load_uses_one_budget_through_vector_index(
-    monkeypatch, expiry_stage
-):
+def test_repository_load_uses_one_budget_through_vector_index(monkeypatch, expiry_stage):
     settings = get_settings()
     monkeypatch.setattr(settings, "app_api_key", "")
     monkeypatch.setattr(settings, "rate_limit_max_requests", 0)

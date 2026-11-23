@@ -3,7 +3,6 @@ from pathlib import Path
 
 from app.schemas.report_schema import ApiEndpoint
 
-
 HTTP_METHODS = "get|post|put|patch|delete|options|head"
 PYTHON_SUFFIXES = {".py"}
 JAVASCRIPT_SUFFIXES = {".js", ".ts", ".tsx", ".jsx"}
@@ -17,7 +16,7 @@ def join_route_path(*parts: str) -> str:
 
 
 def find_next_handler(lines: list[str], decorator_index: int) -> str:
-    for line in lines[decorator_index: decorator_index + 8]:
+    for line in lines[decorator_index : decorator_index + 8]:
         match = re.match(r"\s*(?:async\s+)?def\s+(\w+)\s*\(", line)
         if match:
             return match.group(1)
@@ -127,7 +126,9 @@ class APIAnalyzer:
             r"\bapp\.use\(\s*[\"'`](?P<prefix>[^\"'`]+)[\"'`]\s*,\s*(?P<router>\w+)",
             re.IGNORECASE,
         )
-        router_prefixes = {match.group("router"): match.group("prefix") for match in router_prefix_pattern.finditer(content)}
+        router_prefixes = {
+            match.group("router"): match.group("prefix") for match in router_prefix_pattern.finditer(content)
+        }
 
         for line_number, line in enumerate(content.splitlines(), start=1):
             for match in express_pattern.finditer(line):

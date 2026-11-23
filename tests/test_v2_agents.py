@@ -6,11 +6,15 @@ from fastapi.testclient import TestClient
 from app.agents.techstack_agent import TechStackAgent
 from app.config import get_settings
 from app.main import _rate_limit_buckets, app
+from app.services import repo_loader, vector_store
 from app.services.file_parser import DocumentChunk, ParsedFile, read_repository_files
-from app.services import repo_loader
-from app.services import vector_store
 from app.services.llm_service import build_context, build_no_key_fallback_answer, redact_sensitive_text
-from app.services.repo_loader import RepositoryLoadError, browse_github_repository, load_repository, validate_github_repo_url
+from app.services.repo_loader import (
+    RepositoryLoadError,
+    browse_github_repository,
+    load_repository,
+    validate_github_repo_url,
+)
 from app.services.report_service import ReportService
 from app.services.vector_store import build_chroma_settings, build_vector_index_manifest
 
@@ -102,12 +106,13 @@ def make_demo_repo(root: Path) -> str:
         encoding="utf-8",
     )
     (repo / "package.json").write_text(
-        '{"scripts":{"dev":"vite --host 0.0.0.0","start":"node server.js"},"dependencies":{"react":"latest","vite":"latest"}}',
+        '{"scripts":{"dev":"vite --host 0.0.0.0","start":"node server.js"},'
+        '"dependencies":{"react":"latest","vite":"latest"}}',
         encoding="utf-8",
     )
     (repo / "Dockerfile").write_text("FROM python:3.12\n", encoding="utf-8")
     (repo / "prisma" / "schema.prisma").write_text(
-        "datasource db {\n  provider = \"postgresql\"\n}\nmodel User {\n  id Int @id\n  email String @unique\n}\n",
+        'datasource db {\n  provider = "postgresql"\n}\nmodel User {\n  id Int @id\n  email String @unique\n}\n',
         encoding="utf-8",
     )
     return repository_id
@@ -475,7 +480,9 @@ def test_browse_github_repository_falls_back_to_web_browser_on_api_rate_limit(tm
     monkeypatch.setattr(settings, "max_repository_bytes", 100_000)
 
     def fake_default_branch(_owner: str, _repo: str, _timeout_seconds: int):
-        raise RepositoryLoadError("GitHub API rate limit or permission blocked the request; set server-side GITHUB_TOKEN to raise the limit")
+        raise RepositoryLoadError(
+            "GitHub API rate limit or permission blocked the request; set server-side GITHUB_TOKEN to raise the limit"
+        )
 
     root_page = """
       <a href="/openai/codex/tree/main/app">app</a>
@@ -698,7 +705,10 @@ def test_remote_analysis_snapshot_feeds_report_without_unsafe_files(tmp_path, mo
     files = [
         ParsedFile(
             file_path="app/main.py",
-            content="from fastapi import FastAPI\napp = FastAPI()\n@app.get('/health')\ndef health(): return {'status': 'ok'}\n",
+            content=(
+                "from fastapi import FastAPI\napp = FastAPI()\n"
+                "@app.get('/health')\ndef health(): return {'status': 'ok'}\n"
+            ),
         ),
         ParsedFile(file_path="requirements.txt", content="fastapi\nuvicorn\n"),
         ParsedFile(file_path=".env", content="DEEPSEEK_API_KEY=must-not-persist\n"),

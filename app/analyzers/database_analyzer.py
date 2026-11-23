@@ -67,8 +67,13 @@ class DatabaseAnalyzer:
                             relationships=[field_name] if relationship else [],
                         )
                     )
-                elif re.search(r"\bmodels\.(CharField|TextField|IntegerField|BigIntegerField|BooleanField|DateTimeField|DateField|ForeignKey|OneToOneField|ManyToManyField|JSONField|DecimalField)\b", expr):
-                    relationship = re.search(r"\bmodels\.(ForeignKey|OneToOneField|ManyToManyField)\b", expr) is not None
+                elif re.search(
+                    r"\bmodels\.(CharField|TextField|IntegerField|BigIntegerField|BooleanField|DateTimeField|DateField|ForeignKey|OneToOneField|ManyToManyField|JSONField|DecimalField)\b",
+                    expr,
+                ):
+                    relationship = (
+                        re.search(r"\bmodels\.(ForeignKey|OneToOneField|ManyToManyField)\b", expr) is not None
+                    )
                     if current_model:
                         target = model_relationships if relationship else model_fields
                         target.setdefault(current_model, []).append(field_name)

@@ -6,12 +6,11 @@ import json
 import re
 import shutil
 import time
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from pathlib import Path
-from pathlib import PurePosixPath
-from typing import Callable, Iterator
+from pathlib import Path, PurePosixPath
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, unquote, urlparse
 from urllib.request import Request, urlopen
@@ -177,9 +176,7 @@ def fetch_github_json(
         if active_budget is not None:
             active_budget.record_request()
         request_timeout = (
-            active_budget.effective_timeout(timeout_seconds)
-            if active_budget is not None
-            else timeout_seconds
+            active_budget.effective_timeout(timeout_seconds) if active_budget is not None else timeout_seconds
         )
         with urlopen(request, timeout=request_timeout) as response:
             data = response.read()
@@ -190,7 +187,10 @@ def fetch_github_json(
         if exc.code == 404:
             raise RepositoryLoadError("GitHub repository or file was not found") from exc
         if exc.code == 403:
-            raise RepositoryLoadError(f"GitHub API rate limit or permission blocked the request; {GITHUB_WEB_RATE_LIMIT_MARKER} to raise the limit") from exc
+            raise RepositoryLoadError(
+                "GitHub API rate limit or permission blocked the request; "
+                f"{GITHUB_WEB_RATE_LIMIT_MARKER} to raise the limit"
+            ) from exc
         raise RepositoryLoadError(f"GitHub API request failed with status {exc.code}") from exc
     except URLError as exc:
         raise RepositoryLoadError(f"GitHub API network error: {exc.reason}") from exc
@@ -211,18 +211,13 @@ def fetch_url_bytes(
         if active_budget is not None:
             active_budget.record_request()
         request_timeout = (
-            active_budget.effective_timeout(timeout_seconds)
-            if active_budget is not None
-            else timeout_seconds
+            active_budget.effective_timeout(timeout_seconds) if active_budget is not None else timeout_seconds
         )
         with urlopen(request, timeout=request_timeout) as response:
             content_length = response.headers.get("Content-Length")
             if max_bytes is not None and content_length and int(content_length) > max_bytes:
                 raise RepositoryLoadError("remote GitHub file is too large")
-            if max_bytes is None:
-                data = response.read()
-            else:
-                data = response.read(max_bytes + 1)
+            data = response.read() if max_bytes is None else response.read(max_bytes + 1)
             if active_budget is not None:
                 active_budget.check_deadline()
             if max_bytes is not None and len(data) > max_bytes:
@@ -232,7 +227,9 @@ def fetch_url_bytes(
         if exc.code == 404:
             raise RepositoryLoadError("GitHub web page or raw file was not found") from exc
         if exc.code == 403:
-            raise RepositoryLoadError("GitHub web page access was blocked; set server-side GITHUB_TOKEN or try again later") from exc
+            raise RepositoryLoadError(
+                "GitHub web page access was blocked; set server-side GITHUB_TOKEN or try again later"
+            ) from exc
         raise RepositoryLoadError(f"GitHub web request failed with status {exc.code}") from exc
     except URLError as exc:
         raise RepositoryLoadError(f"GitHub web network error: {exc.reason}") from exc
@@ -344,11 +341,7 @@ def is_api_rate_limit_error(exc: RepositoryLoadError) -> bool:
 
 def parse_default_branch_from_web_page(page: str, owner: str, repo: str) -> str:
     embedded_data = parse_web_embedded_data(page)
-    ref_info = (
-        embedded_data.get("payload", {})
-        .get("codeViewRepoRoute", {})
-        .get("refInfo", {})
-    )
+    ref_info = embedded_data.get("payload", {}).get("codeViewRepoRoute", {}).get("refInfo", {})
     branch_name = ref_info.get("name")
     if isinstance(branch_name, str) and branch_name:
         return branch_name
@@ -388,12 +381,7 @@ def parse_web_embedded_data(page: str) -> dict:
 
 def parse_web_directory_entries(page: str, owner: str, repo: str, branch: str) -> list[tuple[str, str]]:
     embedded_data = parse_web_embedded_data(page)
-    items = (
-        embedded_data.get("payload", {})
-        .get("codeViewRepoRoute", {})
-        .get("tree", {})
-        .get("items", [])
-    )
+    items = embedded_data.get("payload", {}).get("codeViewRepoRoute", {}).get("tree", {}).get("items", [])
     escaped_owner = re.escape(owner)
     escaped_repo = re.escape(repo)
     escaped_branch = re.escape(branch)
@@ -564,7 +552,8 @@ def browse_github_repository(
             default_branch = get_github_default_branch(owner, repo, settings.github_api_timeout_seconds)
             commit_sha = (
                 get_github_commit_sha(owner, repo, default_branch, settings.github_api_timeout_seconds)
-                if persist_manifest else None
+                if persist_manifest
+                else None
             )
             tree = get_github_tree(owner, repo, commit_sha or default_branch, settings.github_api_timeout_seconds)
         except RepositoryLoadError as exc:

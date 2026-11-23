@@ -1,7 +1,8 @@
-import json
 import hashlib
+import json
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Event, Lock
 
 import pytest
@@ -330,9 +331,9 @@ def test_https_redirects_receive_business_cache_policy_and_security_headers(monk
 
 
 def test_runtime_security_settings_are_documented_and_jsonl_multiprocess_limit_is_explicit():
-    env_example = open(".env.example", encoding="utf-8").read()
-    readme = open("README.md", encoding="utf-8").read()
-    security_log = open("SECURITY_LOG.md", encoding="utf-8").read()
+    env_example = Path(".env.example").read_text(encoding="utf-8")
+    readme = Path("README.md").read_text(encoding="utf-8")
+    security_log = Path("SECURITY_LOG.md").read_text(encoding="utf-8")
 
     for name in (
         "LOGIN_RATE_LIMIT_MAX_BUCKETS",

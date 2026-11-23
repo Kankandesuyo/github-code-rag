@@ -150,3 +150,17 @@ def test_github_import_indexes_the_resolved_commit_and_records_it(tmp_path, monk
     repository_id, _, _ = repo_loader.load_repository("https://github.com/example/demo")
     manifest_path = tmp_path / repository_id / ".codebase_agent" / "remote_repository_manifest.json"
     assert json.loads(manifest_path.read_text(encoding="utf-8"))["commit_sha"] == sha
+
+
+def test_replacing_collection_reports_unexpected_delete_error(monkeypatch, caplog):
+    def fail_delete(_collection_name):
+        raise OSError("private database path")
+
+    def unexpected_create(**_kwargs):
+        pytest.fail("replacement must stop after an unexpected delete failure")
+
+    client = SimpleNamespace(delete_collection=fail_delete, get_or_create_collection=unexpected_create)
+    monkeypatch.setattr(vector_store, "get_chroma_client", lambda: client)
+    with pytest.raises(vector_store.VectorStoreError, match="failed to replace repository vector collection"):
+        vector_store.recreate_collection("demo")
+    assert "private database path" not in caplog.text

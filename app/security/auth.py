@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 
-
 SESSION_COOKIE_NAME = "github_code_rag_session"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 _login_attempts: dict[str, deque[float]] = defaultdict(deque)
@@ -89,16 +88,14 @@ def ensure_deployment_security() -> None:
     settings = get_settings()
     deployment_mode = settings.deployment_mode.strip().lower()
     if deployment_mode not in {"local", "development", "production"}:
-        raise AuthConfigurationError(
-            "DEPLOYMENT_MODE must be one of: local, development, production"
-        )
+        raise AuthConfigurationError("DEPLOYMENT_MODE must be one of: local, development, production")
     if deployment_mode != "production":
         return
 
     public_base_url = settings.public_base_url.strip()
     try:
         parsed_base_url = urlsplit(public_base_url)
-        parsed_base_url.port
+        _ = parsed_base_url.port  # Access validates the port.
     except ValueError as exc:
         raise AuthConfigurationError("PUBLIC_BASE_URL must be a valid HTTPS URL") from exc
     if (
@@ -110,22 +107,16 @@ def ensure_deployment_security() -> None:
         or parsed_base_url.fragment
         or any(character.isspace() for character in public_base_url)
     ):
-        raise AuthConfigurationError(
-            "PUBLIC_BASE_URL must be an HTTPS URL without credentials, query, or fragment"
-        )
+        raise AuthConfigurationError("PUBLIC_BASE_URL must be an HTTPS URL without credentials, query, or fragment")
 
     if any(host.strip() == "*" for host in settings.allowed_hosts):
         raise AuthConfigurationError("ALLOWED_HOSTS must not contain '*' in production")
     if not settings.force_https and not settings.tls_terminated_by_proxy:
-        raise AuthConfigurationError(
-            "Production requires FORCE_HTTPS=true or TLS_TERMINATED_BY_PROXY=true"
-        )
+        raise AuthConfigurationError("Production requires FORCE_HTTPS=true or TLS_TERMINATED_BY_PROXY=true")
 
     app_api_key = settings.app_api_key.strip()
     if app_api_key and len(app_api_key) < 32:
-        raise AuthConfigurationError(
-            "APP_API_KEY must contain at least 32 characters in production"
-        )
+        raise AuthConfigurationError("APP_API_KEY must contain at least 32 characters in production")
 
     admin_username = settings.admin_username.strip()
     admin_password_hash = settings.admin_password_hash.strip()

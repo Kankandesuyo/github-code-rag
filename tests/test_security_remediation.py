@@ -5,7 +5,6 @@ from app.config import Settings, get_settings
 from app.main import app
 from app.security.auth import AuthConfigurationError
 
-
 STRONG_API_KEY = "a" * 32
 
 
@@ -89,17 +88,15 @@ def test_production_startup_fails_without_any_authentication(monkeypatch):
         tls_terminated_by_proxy=True,
     )
 
-    with pytest.raises(AuthConfigurationError, match="authentication"):
-        with TestClient(app):
-            pass
+    with pytest.raises(AuthConfigurationError, match="authentication"), TestClient(app):
+        pass
 
 
 def test_unknown_deployment_mode_fails_closed(monkeypatch):
     configure_security(monkeypatch, deployment_mode="prodution", app_api_key="automation-secret")
 
-    with pytest.raises(AuthConfigurationError, match="DEPLOYMENT_MODE"):
-        with TestClient(app):
-            pass
+    with pytest.raises(AuthConfigurationError, match="DEPLOYMENT_MODE"), TestClient(app):
+        pass
 
 
 def test_production_startup_rejects_partial_admin_configuration_even_with_api_key(monkeypatch):
@@ -111,9 +108,8 @@ def test_production_startup_rejects_partial_admin_configuration_even_with_api_ke
         tls_terminated_by_proxy=True,
     )
 
-    with pytest.raises(AuthConfigurationError, match="ADMIN_USERNAME"):
-        with TestClient(app):
-            pass
+    with pytest.raises(AuthConfigurationError, match="ADMIN_USERNAME"), TestClient(app):
+        pass
 
 
 def test_production_session_authentication_requires_secure_cookie(monkeypatch):
@@ -127,9 +123,8 @@ def test_production_session_authentication_requires_secure_cookie(monkeypatch):
         tls_terminated_by_proxy=True,
     )
 
-    with pytest.raises(AuthConfigurationError, match="AUTH_COOKIE_SECURE"):
-        with TestClient(app):
-            pass
+    with pytest.raises(AuthConfigurationError, match="AUTH_COOKIE_SECURE"), TestClient(app):
+        pass
 
 
 def test_complete_production_admin_authentication_starts_with_secure_cookie(monkeypatch):
@@ -159,9 +154,8 @@ def test_production_rejects_weak_api_key(monkeypatch, weak_api_key):
         tls_terminated_by_proxy=True,
     )
 
-    with pytest.raises(AuthConfigurationError, match="APP_API_KEY.*32"):
-        with TestClient(app):
-            pass
+    with pytest.raises(AuthConfigurationError, match="APP_API_KEY.*32"), TestClient(app):
+        pass
 
 
 def test_api_key_only_production_accepts_32_character_key_without_session_secret(monkeypatch):
@@ -198,9 +192,8 @@ def test_production_requires_application_or_proxy_https_enforcement(monkeypatch)
         tls_terminated_by_proxy=False,
     )
 
-    with pytest.raises(AuthConfigurationError, match="FORCE_HTTPS.*TLS_TERMINATED_BY_PROXY"):
-        with TestClient(app):
-            pass
+    with pytest.raises(AuthConfigurationError, match="FORCE_HTTPS.*TLS_TERMINATED_BY_PROXY"), TestClient(app):
+        pass
 
 
 def test_production_rejects_wildcard_allowed_hosts(monkeypatch):
@@ -212,9 +205,8 @@ def test_production_rejects_wildcard_allowed_hosts(monkeypatch):
         allowed_hosts=["*"],
     )
 
-    with pytest.raises(AuthConfigurationError, match="ALLOWED_HOSTS"):
-        with TestClient(app):
-            pass
+    with pytest.raises(AuthConfigurationError, match="ALLOWED_HOSTS"), TestClient(app):
+        pass
 
 
 @pytest.mark.parametrize(
@@ -235,9 +227,8 @@ def test_production_startup_rejects_unsafe_public_base_url(monkeypatch, public_b
         public_base_url=public_base_url,
     )
 
-    with pytest.raises(AuthConfigurationError, match="PUBLIC_BASE_URL"):
-        with TestClient(app):
-            pass
+    with pytest.raises(AuthConfigurationError, match="PUBLIC_BASE_URL"), TestClient(app):
+        pass
 
 
 def test_untrusted_host_is_rejected(monkeypatch):

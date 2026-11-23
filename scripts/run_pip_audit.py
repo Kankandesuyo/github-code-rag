@@ -7,7 +7,6 @@ import sys
 from collections.abc import Callable
 from datetime import date
 
-
 ALLOWED_WAIVERS = frozenset(
     {
         "PYSEC-2026-311",

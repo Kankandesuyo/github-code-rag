@@ -58,7 +58,7 @@ def test_ci_uses_python_312_and_runs_required_checks():
     assert 'python-version: "3.12"' in workflow
     assert "python -m compileall -q app tests" in workflow
     assert "python -m pip check" in workflow
-    assert "python -m ruff check --select E9,F63,F7,F82 app tests scripts" in workflow
+    assert "python -m ruff check --select E,F,B,SIM,UP,I app tests scripts" in workflow
     assert "--cov=app" in workflow
     assert "--cov-fail-under=80" in workflow
     assert "python -m pip install -r requirements-dev.txt" in workflow
@@ -67,9 +67,7 @@ def test_ci_uses_python_312_and_runs_required_checks():
 
 
 def test_github_actions_are_pinned_to_immutable_commits():
-    workflows = "\n".join(
-        read(path) for path in (".github/workflows/ci.yml", ".github/workflows/pages.yml")
-    )
+    workflows = "\n".join(read(path) for path in (".github/workflows/ci.yml", ".github/workflows/pages.yml"))
     action_refs = re.findall(r"uses:\s+[^@\s]+@([^\s#]+)", workflows)
 
     assert action_refs
@@ -137,9 +135,7 @@ def test_compose_drops_privileges_and_bounds_resources():
 
 
 def test_security_delivery_boundaries_are_documented():
-    documents = "\n".join(
-        read(path) for path in ("README.md", "SECURITY_LOG.md", "UPDATE_README.md")
-    )
+    documents = "\n".join(read(path) for path in ("README.md", "SECURITY_LOG.md", "UPDATE_README.md"))
 
     for required_text in (
         "本地威胁模型",
@@ -155,7 +151,6 @@ def test_security_delivery_boundaries_are_documented():
         "共享队列",
     ):
         assert required_text in documents
-
 
 
 def test_readme_documents_single_worker_and_relocated_images():

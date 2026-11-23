@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
 import json
 import logging
-from pathlib import Path
 import re
 import shutil
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from app.config import get_settings
 from app.utils.repository_ids import REPOSITORY_ID_REGEX
-
 
 logger = logging.getLogger(__name__)
 REPOSITORY_ID_PATTERN = re.compile(REPOSITORY_ID_REGEX)
@@ -133,9 +132,7 @@ class RepositoryCatalogService:
         files = vector.get("files", {}) if vector else {}
         files_indexed = len(files) if isinstance(files, dict) else 0
         if not files_indexed:
-            files_indexed = int(
-                source_manifest.get("files_indexed", remote.get("files_indexed", 0)) or 0
-            )
+            files_indexed = int(source_manifest.get("files_indexed", remote.get("files_indexed", 0)) or 0)
         chunks_indexed = int(vector.get("chunk_count", 0) or 0) if vector else 0
         source = source_manifest.get("source")
         if not isinstance(source, str) or not source:

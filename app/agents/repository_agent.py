@@ -1,12 +1,11 @@
-from pathlib import Path
 import time
+from pathlib import Path
 
 from app.config import get_settings
 from app.schemas.report_schema import AgentLog, RepositoryAnalysis
 from app.services.file_parser import get_language
 from app.services.repository_catalog import resolve_repository_path
 from app.utils.file_utils import should_ignore_dir, should_ignore_file
-
 
 ENTRY_POINT_NAMES = {
     "main.py",
@@ -93,7 +92,9 @@ class RepositoryAgent:
             children = [
                 child
                 for child in sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
-                if not child.is_symlink() and not should_ignore_dir(child) and not (child.is_file() and should_ignore_file(child))
+                if not child.is_symlink()
+                and not should_ignore_dir(child)
+                and not (child.is_file() and should_ignore_file(child))
             ]
             for index, child in enumerate(children):
                 if entries_added >= max_entries:

@@ -1,6 +1,7 @@
 import time
-from app.analyzers.techstack_analyzer import TechStackAnalyzer
+
 from app.agents.repository_agent import RepositoryAgent
+from app.analyzers.techstack_analyzer import TechStackAnalyzer
 from app.schemas.report_schema import AgentLog, TechStackResult
 
 

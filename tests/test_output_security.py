@@ -11,7 +11,6 @@ from app.services.llm_service import LLMServiceError
 from app.services.repo_loader import RepositoryLoadError
 from app.services.vector_store import VectorStoreError
 
-
 SENTINEL = r"TOP-SECRET-C:\private\upstream.txt"
 SECRET_VALUES = (
     SENTINEL,

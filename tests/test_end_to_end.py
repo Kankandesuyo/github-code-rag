@@ -37,6 +37,7 @@ def test_remote_import_chat_report_and_readme_journey(tmp_path, monkeypatch, com
         ParsedFile(file_path="requirements.txt", content="fastapi\nuvicorn\n"),
         ParsedFile(file_path="README.md", content="# Demo API\nA FastAPI health service.\n"),
     ]
+
     def fake_browse(github_url, repository_id):
         save_remote_repository_manifest(
             repository_id,
@@ -68,9 +69,7 @@ def test_remote_import_chat_report_and_readme_journey(tmp_path, monkeypatch, com
         assert chat.json()["sources"]
         assert any(source["file_path"] == "app/main.py" for source in chat.json()["sources"])
         assert any(
-            source["url"].startswith(
-                f"https://github.com/example/demo-api/blob/{commit_sha or 'HEAD'}/app/main.py#L"
-            )
+            source["url"].startswith(f"https://github.com/example/demo-api/blob/{commit_sha or 'HEAD'}/app/main.py#L")
             for source in chat.json()["sources"]
             if source["url"]
         )

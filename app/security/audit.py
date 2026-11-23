@@ -4,13 +4,12 @@ import hashlib
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from threading import Lock
 
 from fastapi import Request
 
 from app.config import get_settings
-
 
 logger = logging.getLogger(__name__)
 _audit_lock = Lock()
@@ -41,7 +40,7 @@ def write_security_audit(
         return
 
     record: dict[str, str] = {
-        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
         "event": event,
         "outcome": outcome,
     }
@@ -49,9 +48,7 @@ def write_security_audit(
     if actor_id is not None:
         record["actor_id"] = actor_id
     if repository_id is not None and _SAFE_REPOSITORY_ID.fullmatch(repository_id):
-        record["repository_fingerprint"] = hashlib.sha256(
-            repository_id.encode("utf-8")
-        ).hexdigest()
+        record["repository_fingerprint"] = hashlib.sha256(repository_id.encode("utf-8")).hexdigest()
 
     path = settings.security_audit_log_path
     try:

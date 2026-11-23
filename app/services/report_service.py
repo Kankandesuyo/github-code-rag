@@ -3,12 +3,12 @@ import re
 import time
 from pathlib import Path
 
+from app.agents.repository_agent import RepositoryAgent
 from app.analyzers.api_analyzer import APIAnalyzer
 from app.analyzers.call_graph_analyzer import CallGraphAnalyzer
 from app.analyzers.database_analyzer import DatabaseAnalyzer
 from app.analyzers.dependency_analyzer import DependencyAnalyzer
 from app.analyzers.entrypoint_analyzer import EntrypointAnalyzer
-from app.agents.repository_agent import RepositoryAgent
 from app.graph.workflow import CodebaseWorkflow
 from app.schemas.report_schema import (
     AgentLog,
@@ -41,7 +41,6 @@ class ReportService:
             return ""
 
     def collect_startup_hints(self, repo_path: Path) -> list[str]:
-        started = time.perf_counter()
         hints: list[str] = []
         package_json = repo_path / "package.json"
         if package_json.exists():
@@ -57,7 +56,10 @@ class ReportService:
         if (repo_path / "requirements.txt").exists():
             hints.append("Python dependencies detected: install with `pip install -r requirements.txt`.")
         if (repo_path / "pyproject.toml").exists():
-            hints.append("Python project metadata detected in `pyproject.toml`; use the configured build tool or `pip install -e .`.")
+            hints.append(
+                "Python project metadata detected in `pyproject.toml`; "
+                "use the configured build tool or `pip install -e .`."
+            )
         if (repo_path / "manage.py").exists():
             hints.append("Django entry point detected: try `python manage.py runserver`.")
         if (repo_path / "app" / "main.py").exists():
@@ -147,7 +149,9 @@ class ReportService:
                     variables.add(match.group(1))
             for match in re.finditer(r"\b[A-Z][A-Z0-9_]{2,}\b", content):
                 token = match.group(0)
-                if any(marker in token for marker in ("KEY", "TOKEN", "SECRET", "URL", "HOST", "PORT", "DATABASE", "MODEL")):
+                if any(
+                    marker in token for marker in ("KEY", "TOKEN", "SECRET", "URL", "HOST", "PORT", "DATABASE", "MODEL")
+                ):
                     variables.add(token)
         return sorted(variables)[:80], AgentLog(
             agent="EnvironmentAnalyzer",
@@ -233,7 +237,20 @@ class ReportService:
             ]
         return data, [*cache_logs, *analysis_logs]
 
-    def unpack_manifest(self, data: dict) -> tuple[RepositoryAnalysis, TechStackResult, list[str], list[ApiEndpoint], list[DatabaseFinding], list[EntrypointFinding], list[ModuleDependency], list[FunctionCall], list[str], list[str]]:
+    def unpack_manifest(
+        self, data: dict
+    ) -> tuple[
+        RepositoryAnalysis,
+        TechStackResult,
+        list[str],
+        list[ApiEndpoint],
+        list[DatabaseFinding],
+        list[EntrypointFinding],
+        list[ModuleDependency],
+        list[FunctionCall],
+        list[str],
+        list[str],
+    ]:
         return (
             RepositoryAnalysis.model_validate(data["repository"]),
             TechStackResult.model_validate(data["tech_stack"]),
@@ -250,7 +267,18 @@ class ReportService:
     def build_project_report(self, repository_id: str) -> ProjectReportResponse:
         _, supervisor_logs = self.workflow.supervisor.plan("report")
         data, manifest_logs = self.load_analysis_manifest(repository_id)
-        repository, tech_stack, startup_hints, api_endpoints, database_findings, entrypoints, dependencies, function_calls, env_vars, deployment_methods = self.unpack_manifest(data)
+        (
+            repository,
+            tech_stack,
+            startup_hints,
+            api_endpoints,
+            database_findings,
+            entrypoints,
+            dependencies,
+            function_calls,
+            env_vars,
+            deployment_methods,
+        ) = self.unpack_manifest(data)
         markdown, overview, startup_guide, writer_logs = self.workflow.writer_agent.write_report(
             repository_id=repository_id,
             repository=repository,
@@ -285,7 +313,18 @@ class ReportService:
     def generate_readme(self, repository_id: str) -> GenerateReadmeResponse:
         _, supervisor_logs = self.workflow.supervisor.plan("readme")
         data, manifest_logs = self.load_analysis_manifest(repository_id)
-        repository, tech_stack, startup_hints, api_endpoints, _database_findings, _entrypoints, _dependencies, _function_calls, _env_vars, _deployment_methods = self.unpack_manifest(data)
+        (
+            repository,
+            tech_stack,
+            startup_hints,
+            api_endpoints,
+            _database_findings,
+            _entrypoints,
+            _dependencies,
+            _function_calls,
+            _env_vars,
+            _deployment_methods,
+        ) = self.unpack_manifest(data)
         markdown, writer_logs = self.workflow.writer_agent.write_readme(
             repository_id=repository_id,
             repository=repository,

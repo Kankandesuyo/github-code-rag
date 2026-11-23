@@ -107,7 +107,7 @@ def test_catalog_delete_is_root_contained_and_calls_vector_cleanup(tmp_path):
     assert sibling.exists()
 
 
-def test_catalog_delete_rejects_invalid_missing_and_symlink(tmp_path):
+def test_catalog_delete_rejects_invalid_missing_and_symlink(tmp_path, link_directory):
     service = RepositoryCatalogService(tmp_path, vector_cleanup=lambda _repository_id: 0)
 
     with pytest.raises(InvalidRepositoryIdError):
@@ -118,10 +118,7 @@ def test_catalog_delete_rejects_invalid_missing_and_symlink(tmp_path):
     outside = tmp_path.parent / "outside-project"
     outside.mkdir(exist_ok=True)
     link = tmp_path / "linked-project"
-    try:
-        link.symlink_to(outside, target_is_directory=True)
-    except OSError:
-        pytest.skip("directory symlinks are not available in this Windows environment")
+    link_directory(link, outside)
     with pytest.raises(InvalidRepositoryIdError):
         service.delete_repository("linked-project")
     assert outside.exists()
@@ -201,8 +198,12 @@ def test_repository_catalog_endpoints_publish_typed_openapi_contract():
         openapi = client.get("/openapi.json").json()
 
     list_schema = openapi["paths"]["/repositories"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
-    detail_schema = openapi["paths"]["/repositories/{repository_id}"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
-    delete_schema = openapi["paths"]["/repositories/{repository_id}"]["delete"]["responses"]["200"]["content"]["application/json"]["schema"]
+    detail_schema = openapi["paths"]["/repositories/{repository_id}"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+    delete_schema = openapi["paths"]["/repositories/{repository_id}"]["delete"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
 
     assert list_schema["$ref"].endswith("RepositoryListResponse")
     assert detail_schema["$ref"].endswith("RepositorySummaryResponse")

@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
 import hashlib
 import json
-from pathlib import Path
 import re
 import shutil
 import stat
@@ -12,9 +9,13 @@ import struct
 import tempfile
 import time
 import unicodedata
-from urllib.parse import unquote_to_bytes
 import uuid
 import zipfile
+from contextlib import suppress
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+from urllib.parse import unquote_to_bytes
 
 from app.config import Settings, get_settings
 from app.services.file_parser import (
@@ -26,7 +27,6 @@ from app.services.file_parser import (
 from app.services.repo_loader import ImportBudget
 from app.services.repository_catalog import InvalidRepositoryIdError, resolve_repository_path
 from app.utils.file_utils import should_ignore_dir, should_ignore_file
-
 
 SOURCE_MANIFEST_FILE = "source_manifest.json"
 SOURCE_MANIFEST_VERSION = 1
@@ -48,7 +48,7 @@ WINDOWS_DEVICE_NAMES = {
 }
 
 
-class ArchiveImportErrorCode(str, Enum):
+class ArchiveImportErrorCode(StrEnum):
     INVALID_CONTENT_TYPE = "invalid_content_type"
     INVALID_ARCHIVE_NAME = "invalid_archive_name"
     INVALID_CONTENT_LENGTH = "invalid_content_length"
@@ -323,9 +323,7 @@ def preflight_zip_central_directory(
     if total_entries > active_settings.max_archive_files + active_settings.max_archive_directories:
         raise ArchiveImportError(ArchiveImportErrorCode.FILE_LIMIT_EXCEEDED)
     if central_directory_size > active_settings.max_archive_central_directory_bytes:
-        raise ArchiveImportError(
-            ArchiveImportErrorCode.CENTRAL_DIRECTORY_LIMIT_EXCEEDED
-        )
+        raise ArchiveImportError(ArchiveImportErrorCode.CENTRAL_DIRECTORY_LIMIT_EXCEEDED)
 
     tail_start = archive_size - len(tail)
     eocd_absolute_offset = tail_start + eocd_offset_in_tail
@@ -416,10 +414,7 @@ def _should_extract_entry(entry: SafeArchiveEntry, settings: Settings) -> bool:
     if entry.is_directory or entry.info.file_size > settings.max_file_size_bytes:
         return False
     path = Path(*entry.parts)
-    if any(
-        should_ignore_dir(parent) or should_ignore_dir(Path(parent.name.lower()))
-        for parent in path.parents
-    ):
+    if any(should_ignore_dir(parent) or should_ignore_dir(Path(parent.name.lower())) for parent in path.parents):
         return False
     return not should_ignore_file(path)
 
@@ -463,9 +458,7 @@ def extract_safe_archive(
                         written > entry.info.file_size
                         or extracted_bytes > active_settings.max_archive_uncompressed_bytes
                     ):
-                        raise ArchiveImportError(
-                            ArchiveImportErrorCode.UNCOMPRESSED_LIMIT_EXCEEDED
-                        )
+                        raise ArchiveImportError(ArchiveImportErrorCode.UNCOMPRESSED_LIMIT_EXCEEDED)
                     target.write(chunk)
         except ArchiveImportError:
             raise
@@ -483,10 +476,8 @@ def _prune_unparsed_files(snapshot_root: Path, parsed_files: list[ParsedFile]) -
             if relative not in retained:
                 path.unlink()
         elif path.is_dir():
-            try:
+            with suppress(OSError):
                 path.rmdir()
-            except OSError:
-                pass
 
 
 def _write_source_manifest(
@@ -613,10 +604,7 @@ def load_zip_repository(
         if budget is not None:
             budget.check_deadline()
 
-        snapshot_bytes = sum(
-            (staging_path / Path(*Path(item.file_path).parts)).stat().st_size
-            for item in parsed_files
-        )
+        snapshot_bytes = sum((staging_path / Path(*Path(item.file_path).parts)).stat().st_size for item in parsed_files)
         manifest = {
             "manifest_version": SOURCE_MANIFEST_VERSION,
             "source": ARCHIVE_SOURCE,

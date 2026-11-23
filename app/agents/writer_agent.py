@@ -22,10 +22,14 @@ class WriterAgent:
             lines.append(f"- {category}: {display}")
         return "\n".join(lines)
 
-    def write_project_overview(self, repository_id: str, repository: RepositoryAnalysis, tech_stack: TechStackResult) -> str:
+    def write_project_overview(
+        self, repository_id: str, repository: RepositoryAnalysis, tech_stack: TechStackResult
+    ) -> str:
         stack_values = [item for values in tech_stack.model_dump().values() for item in values]
         stack_text = ", ".join(stack_values[:8]) if stack_values else "no dominant framework detected"
-        entry_text = ", ".join(repository.entry_points[:5]) if repository.entry_points else "no obvious entry point detected"
+        entry_text = (
+            ", ".join(repository.entry_points[:5]) if repository.entry_points else "no obvious entry point detected"
+        )
         return (
             f"`{repository_id}` contains {repository.file_count} readable files across "
             f"{repository.directory_count} directories. Detected stack: {stack_text}. "
@@ -66,8 +70,7 @@ class WriterAgent:
         if not entrypoints:
             return "No obvious startup, application, or configuration entry points were detected."
         return "\n".join(
-            f"- {entrypoint.kind}: `{entrypoint.file_path}` - {entrypoint.reason}"
-            for entrypoint in entrypoints
+            f"- {entrypoint.kind}: `{entrypoint.file_path}` - {entrypoint.reason}" for entrypoint in entrypoints
         )
 
     def write_dependency_analysis(self, dependencies: list[ModuleDependency]) -> str:
@@ -129,10 +132,13 @@ class WriterAgent:
         function_call_analysis = self.write_function_call_analysis(function_calls)
         environment_analysis = self.write_environment_variables(environment_variables)
         deployment_analysis = self.write_deployment_method(deployment_methods)
-        core_modules = "\n".join(
-            f"- `{module['path']}`: {module['file_count']} files, languages={', '.join(module['languages'])}"
-            for module in repository.core_modules
-        ) or "No core modules detected."
+        core_modules = (
+            "\n".join(
+                f"- `{module['path']}`: {module['file_count']} files, languages={', '.join(module['languages'])}"
+                for module in repository.core_modules
+            )
+            or "No core modules detected."
+        )
 
         markdown = "\n\n".join(
             [
@@ -183,7 +189,8 @@ class WriterAgent:
                 "## Project Overview\n\n" + self.write_project_overview(repository_id, repository, tech_stack),
                 "## Features\n\n" + "\n".join(f"- {feature}" for feature in features),
                 "## Tech Stack\n\n" + self.summarize_stack(tech_stack),
-                "## Installation\n\nInstall dependencies according to the detected package files such as `requirements.txt`, `pyproject.toml`, or `package.json`.",
+                "## Installation\n\nInstall dependencies according to the detected package files "
+                "such as `requirements.txt`, `pyproject.toml`, or `package.json`.",
                 "## Startup\n\n" + self.write_startup_guide(startup_hints),
                 "## API\n\n" + api_section,
                 "## Directory Structure\n\n```text\n" + repository.directory_tree + "\n```",

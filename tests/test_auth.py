@@ -135,9 +135,9 @@ def test_frontend_uses_session_login_without_local_storage_secrets():
     assert 'id="logoutButton"' in html_content
     assert 'localStorage.setItem("activeRepositoryId"' in script_content
     assert 'localStorage.getItem("activeRepositoryId"' in script_content
-    assert "localStorage.setItem(\"csrf" not in script_content
-    assert "localStorage.setItem(\"password" not in script_content
-    assert "localStorage.setItem(\"token" not in script_content
+    assert 'localStorage.setItem("csrf' not in script_content
+    assert 'localStorage.setItem("password' not in script_content
+    assert 'localStorage.setItem("token' not in script_content
     assert 'requestJson("/auth/status"' in script_content
     assert 'fetch("/auth/login"' in script_content
     assert 'requestJson("/auth/logout"' in script_content
@@ -158,7 +158,7 @@ def test_frontend_exposes_complete_beginner_workspace_contract():
     assert 'aria-live="polite"' in html_content
     assert "data.items" in script_content
     assert 'method: "DELETE"' in script_content
-    assert 'getApiHeaders({}, true)' in script_content
+    assert "getApiHeaders({}, true)" in script_content
     assert "status === 401" in script_content
     assert "status === 403" in script_content
     assert "status === 429" in script_content
@@ -188,7 +188,7 @@ def test_frontend_exposes_real_zip_import_and_responsive_source_drawer():
     assert 'accept=".zip,application/zip"' in html_content
     assert 'requestJson("/repository/upload-zip"' in script_content
     assert '"X-Archive-Name": encodeURIComponent(file.name)' in script_content
-    assert 'getApiHeaders(' in script_content
+    assert "getApiHeaders(" in script_content
     assert 'document.body.classList.toggle("sidebar-open", isOpen)' in script_content
 
 
