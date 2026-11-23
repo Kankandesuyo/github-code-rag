@@ -99,7 +99,7 @@ def condense_question(question: str, history: Sequence[ChatHistoryMessage]) -> s
     return f"{question}\n此前问题：{redact_sensitive_text(previous)}" if previous else question
 
 
-def build_retrieval_queries(question: str) -> list[str]:
+def build_retrieval_queries(question: str, *, use_hyde: bool = True) -> list[str]:
     settings = get_settings()
     queries = [question]
     prompts = {}
@@ -109,7 +109,7 @@ def build_retrieval_queries(question: str) -> list[str]:
             "query 应包含可能的英文技术词、文件名、函数名、模块名或同义表达。"
             "只返回 JSON 数组字符串，不要解释。"
         )
-    if settings.enable_hyde:
+    if settings.enable_hyde and use_hyde:
         prompts["hyde"] = (
             "你是代码仓库 RAG 的 HyDE 生成器。根据用户问题生成一段可能出现在仓库文档或代码注释中的"
             "假设答案/摘要，用于语义检索。不要编造具体不存在的文件路径。"

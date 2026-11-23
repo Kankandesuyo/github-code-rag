@@ -727,7 +727,9 @@ def retrieve_chat_evidence(request: ChatRequest) -> tuple[list[dict], list[Agent
             )
         )
     try:
-        chunks, search_logs = rag_agent.search(request.repository_id, query)
+        skip_hyde = bool(request.history) and not get_settings().enable_hyde_for_followups
+        search_options = {"use_hyde": False} if skip_hyde else {}
+        chunks, search_logs = rag_agent.search(request.repository_id, query, **search_options)
         return chunks, [*logs, *search_logs]
     except VectorStoreError as exc:
         raise HTTPException(status_code=500, detail="vector store operation failed") from exc

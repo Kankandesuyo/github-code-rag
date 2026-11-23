@@ -8,9 +8,11 @@ from app.services.vector_store import retrieve_relevant_chunks
 class RAGAgent:
     name = "CodeRetriever"
 
-    def search(self, repository_id: str, question: str) -> tuple[list[dict], list[AgentLog]]:
+    def search(
+        self, repository_id: str, question: str, *, use_hyde: bool = True
+    ) -> tuple[list[dict], list[AgentLog]]:
         started = time.perf_counter()
-        retrieval_queries = build_retrieval_queries(question)
+        retrieval_queries = build_retrieval_queries(question, use_hyde=use_hyde)
         candidate_chunks = retrieve_relevant_chunks(repository_id, retrieval_queries)
         chunks = rerank_chunks(question, candidate_chunks)
         logs = [

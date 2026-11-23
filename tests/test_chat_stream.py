@@ -30,7 +30,7 @@ def chat_api(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "rate_limit_max_requests", 0)
     monkeypatch.setattr(settings, "deepseek_api_key", "")
     (tmp_path / "demo").mkdir()
-    monkeypatch.setattr(main.rag_agent, "search", lambda *_: ([CHUNK], []))
+    monkeypatch.setattr(main.rag_agent, "search", lambda *_, **__: ([CHUNK], []))
     with TestClient(main.app) as client:
         yield client
 
@@ -73,7 +73,7 @@ def test_chat_reuses_catalog_and_passes_follow_up_context(chat_api, monkeypatch)
     def disallow_new_catalog(*_args, **_kwargs):
         pytest.fail("chat should use the module-level catalog")
 
-    def search(repo_id, query):
+    def search(repo_id, query, **_options):
         assert repo_id == "demo"
         assert HISTORY[0]["content"] in query
         assert "follow up" in query
@@ -218,7 +218,7 @@ def test_follow_up_condensation_and_fallback_use_the_expected_search_query(chat_
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=completion)))
     monkeypatch.setattr(llm_service, "get_llm_client", lambda: client)
 
-    def search(repository_id, query):
+    def search(repository_id, query, **_options):
         assert repository_id == "demo"
         expected = standalone if provider_outcome == "success" else f"{original}\n此前问题：{HISTORY[0]['content']}"
         assert query == expected
