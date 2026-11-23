@@ -639,7 +639,7 @@ def build_chat_sources(
                     key[0],
                     metadata.get("start_line"),
                     metadata.get("end_line"),
-                    commit_sha,
+                    metadata.get("github_ref", commit_sha),
                 ),
             )
         )

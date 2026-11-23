@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 class ParsedFile:
     file_path: str
     content: str
+    github_ref: str | None = None
 
 
 @dataclass
@@ -679,6 +680,8 @@ def split_files_into_chunks(files: list[ParsedFile], repository_id: str) -> list
             file_chunks = split_fallback_file(parsed_file, repository_id, language)
 
         for chunk in file_chunks:
+            if parsed_file.github_ref is not None:
+                chunk.metadata["github_ref"] = parsed_file.github_ref
             chunk.metadata["chunk_index"] = len(
                 [item for item in chunks if item.metadata["file_path"] == parsed_file.file_path]
             )

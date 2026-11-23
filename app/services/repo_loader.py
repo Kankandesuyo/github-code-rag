@@ -534,6 +534,8 @@ def browse_github_repository_via_web(
                 "github_web_browser",
                 commit_sha=commit_sha,
             )
+            for item in files:
+                item.github_ref = commit_sha or "HEAD"
         return files
 
 
@@ -608,6 +610,8 @@ def browse_github_repository(
                 "github_api_browser",
                 commit_sha=commit_sha,
             )
+            for item in files:
+                item.github_ref = commit_sha or "HEAD"
         return files
 
 

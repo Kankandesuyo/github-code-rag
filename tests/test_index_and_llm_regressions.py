@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.config import get_settings
+from app.main import build_chat_sources
 from app.services import llm_service, repo_loader, vector_store
 from app.services.embedding_service import get_embedding_function, get_embedding_signature
 from app.services.file_parser import ParsedFile, split_files_into_chunks
@@ -132,8 +133,7 @@ def test_rewrite_and_hyde_overlap_and_parse_fenced_json(monkeypatch, hyde_fails)
     assert llm_service.build_retrieval_queries("question") == expected
 
 
-def test_github_import_indexes_the_resolved_commit_and_records_it(tmp_path, monkeypatch):
-    monkeypatch.setattr(get_settings(), "repos_dir", tmp_path)
+def test_github_import_indexes_the_resolved_commit_and_records_it(hash_store, monkeypatch):
     sha = "ad" * 20
     blob = {"type": "blob", "path": "README.md", "size": 8}
 
@@ -147,9 +147,21 @@ def test_github_import_indexes_the_resolved_commit_and_records_it(tmp_path, monk
 
     monkeypatch.setattr(repo_loader, "fetch_github_json", fetch_json)
     monkeypatch.setattr(repo_loader, "fetch_remote_file", lambda *_: ParsedFile("README.md", "# Demo"))
-    repository_id, _, _ = repo_loader.load_repository("https://github.com/example/demo")
-    manifest_path = tmp_path / repository_id / ".codebase_agent" / "remote_repository_manifest.json"
+    github_url = "https://github.com/example/demo"
+    repository_id, chunks, _ = repo_loader.load_repository(github_url)
+    manifest_path = hash_store.repos_dir / repository_id / ".codebase_agent" / "remote_repository_manifest.json"
     assert json.loads(manifest_path.read_text(encoding="utf-8"))["commit_sha"] == sha
+    assert all(chunk.metadata["github_ref"] == sha for chunk in chunks)
+    vector_store.index_chunks_incremental(repository_id, chunks)
+
+    # A subsequent import can update its remote manifest before updating the index.
+    newer_sha = "bc" * 20
+    repo_loader.save_remote_repository_manifest(
+        repository_id, github_url, "main", [], 0, "github_api_browser", commit_sha=newer_sha
+    )
+    indexed = vector_store.retrieve_relevant_chunks(repository_id, "demo")
+    (source,) = build_chat_sources(indexed, github_url, newer_sha)
+    assert source.url.startswith(f"{github_url}/blob/{sha}/README.md")
 
 
 def test_replacing_collection_reports_unexpected_delete_error(monkeypatch, caplog):

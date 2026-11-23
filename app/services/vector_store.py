@@ -197,6 +197,7 @@ def hash_file_chunks(chunks: list[DocumentChunk]) -> str:
         digest.update(str(chunk.metadata.get("language", "")).encode("utf-8"))
         digest.update(str(chunk.metadata.get("symbol_name", "")).encode("utf-8"))
         digest.update(str(chunk.metadata.get("symbol_type", "")).encode("utf-8"))
+        digest.update(str(chunk.metadata.get("github_ref", "")).encode("utf-8"))
         digest.update(chunk.content.encode("utf-8", errors="ignore"))
     return digest.hexdigest()
 
