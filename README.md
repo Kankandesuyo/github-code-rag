@@ -255,11 +255,20 @@ JSONL 写入锁只保护当前 Python 进程内的线程；多个 worker 或容�
 
 当前登录与业务限流桶、导入信号量都在单个 Python 进程内。多 worker 或多容器会各自计数，不能形成全局保护；生产横向扩展应使用 Redis 等共享限流存储，并通过共享队列统一调度导入任务。
 
-### Chroma 临时安全豁免
+### 依赖安全审计与 Chroma 临时豁免
 
-`CVE-2026-45829`（`PYSEC-2026-311`，CVSS 9.3）影响 Chroma 的远端模型加载路径。当前项目只创建本地 `PersistentClient`，不启动 Chroma FastAPI `/api/v2` 服务、不使用 `HttpClient`，而且集合创建和获取都显式传入项目自有 `embedding_function`，因此公告描述的远端恶意模型入口在当前架构中不可达。
+2026-11-24 核对 PyPI 和 GitHub Advisory。`GitPython 3.2.1` 高于 CVE-2026-110855 的修复门槛 3.2.0。`transformers 5.24.0` 高于 PYSEC-2026-3929 的修复门槛 5.10.0，也超出 PYSEC-2026-4174 的受影响范围（4.49.0 至 5.8.1），且该版本的源码在下载自定义生成模块前检查远程代码信任设置。两项依赖均无审计豁免。[GitPython 发布记录](https://pypi.org/project/GitPython/3.2.1/) · [PYSEC-2026-3929](https://osv.dev/vulnerability/PYSEC-2026-3929) · [PYSEC-2026-4174](https://osv.dev/vulnerability/PYSEC-2026-4174) · [Transformers 5.24.0 源码](https://github.com/huggingface/transformers/blob/v5.24.0/src/transformers/generation/utils.py)
 
-2026-09-01 重新核对 GitHub Advisory 与 PyPI 后，`chromadb 1.5.9` 仍是最新版本，且 `CVE-2026-45829/45830/45831/45833` 都没有修复版本。四项公告分别依赖远程 `/api/v2`、服务端多租户授权或 `SimpleRBACAuthorizationProvider`；项目再次通过静态和运行时测试确认只使用单进程本地 `PersistentClient`，不启动 Chroma 服务、不配置 Chroma RBAC。CI 因此只对这四项设置到 `2026-10-01` 前有效的精准豁免；到期当天自动移除并恢复 audit 失败。若 Chroma 发布修复版本，应升级并立即移除豁免；如果项目开始暴露 Chroma 服务、使用远程客户端、接受外部集合配置或启用 Chroma 多租户/RBAC，也必须立即移除豁免并重新评估。主要公告：[GHSA-f4j7-r4q5-qw2c](https://github.com/advisories/GHSA-f4j7-r4q5-qw2c)、[GHSA-2wm9-hf6c-p5cr](https://github.com/advisories/GHSA-2wm9-hf6c-p5cr)、[GHSA-xph7-9rjv-w5fr](https://github.com/advisories/GHSA-xph7-9rjv-w5fr)、[GHSA-36p7-vc44-83pf](https://github.com/advisories/GHSA-36p7-vc44-83pf)。
+`chromadb 1.5.9` 仍是 PyPI 最新正式版本。以下四条公告均无已发布修复，当前部署只使用本地 `PersistentClient`，集合操作显式传入项目自有的 `embedding_function`。四条豁免均在 **2026-12-24** 到期，审计从当天起重新报告它们。[ChromaDB 发布记录](https://pypi.org/project/chromadb/#history)
+
+| 公告 | 当前部署的豁免理由 |
+|---|---|
+| CVE-2026-45829 / PYSEC-2026-311（CVSS 9.3） | 涉及 Chroma HTTP 服务的集合创建和外部模型配置。本项目的 FastAPI 路由没有暴露 Chroma API，也不接受外部集合配置。[GitHub Advisory](https://github.com/advisories/GHSA-f4j7-r4q5-qw2c) |
+| CVE-2026-45830 / PYSEC-2026-3813 | 涉及已认证 Chroma HTTP 用户跨租户访问集合。本项目没有 Chroma HTTP 服务、`HttpClient` 或 Chroma 多租户部署。[GitHub Advisory](https://github.com/advisories/GHSA-2wm9-hf6c-p5cr) |
+| CVE-2026-45831 / PYSEC-2026-3815 | 涉及 `SimpleRBACAuthorizationProvider` 缺少资源范围校验。本项目没有配置 Chroma RBAC。[GitHub Advisory](https://github.com/advisories/GHSA-xph7-9rjv-w5fr) |
+| CVE-2026-45833 / PYSEC-2026-3814 | 涉及 Chroma HTTP 服务按外部配置更新集合并加载模型。本项目的索引更新只处理数据和项目自有的 embedding 函数，没有集合配置更新 API。[GitHub Advisory](https://github.com/advisories/GHSA-36p7-vc44-83pf) |
+
+运行 `python scripts/run_pip_audit.py` 检查依赖。发布修复版本后升级并移除豁免。启用 Chroma 服务、远程客户端、外部集合配置或多租户/RBAC 前，也必须移除豁免并重新评估。
 
 ## 启动
 

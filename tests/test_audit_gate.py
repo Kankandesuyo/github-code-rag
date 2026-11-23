@@ -153,14 +153,14 @@ def test_audit_gate_has_only_reviewed_future_dated_waivers():
         )
         == run_pip_audit.ALLOWED_WAIVERS
     )
-    assert date(2026, 10, 1) == run_pip_audit.WAIVER_EXPIRES_ON
-    assert date(2026, 9, 1) < run_pip_audit.WAIVER_EXPIRES_ON
+    assert date(2026, 12, 24) == run_pip_audit.WAIVER_EXPIRES_ON
+    assert date(2026, 11, 24) < run_pip_audit.WAIVER_EXPIRES_ON
 
 
 def test_audit_gate_applies_waiver_only_before_expiry():
     run_pip_audit = load_gate()
-    active = run_pip_audit.build_audit_command(today=date(2026, 9, 30))
-    expired = run_pip_audit.build_audit_command(today=date(2026, 10, 1))
+    active = run_pip_audit.build_audit_command(today=date(2026, 12, 23))
+    expired = run_pip_audit.build_audit_command(today=date(2026, 12, 24))
 
     for advisory in run_pip_audit.ALLOWED_WAIVERS:
         advisory_index = active.index(advisory)
@@ -176,7 +176,7 @@ def test_audit_gate_propagates_runner_exit_code():
         calls.append(command)
         return 7
 
-    result = run_pip_audit.run_audit(today=date(2026, 9, 30), runner=runner)
+    result = run_pip_audit.run_audit(today=date(2026, 12, 23), runner=runner)
 
     assert result == 7
     assert calls[0].count("--ignore-vuln") == 4
@@ -209,9 +209,7 @@ def test_all_chroma_collection_creation_supplies_owned_embedding_function():
 
 
 def test_chroma_waiver_rationale_and_removal_conditions_are_documented():
-    documents = "\n".join(
-        Path(path).read_text(encoding="utf-8") for path in ("README.md", "SECURITY_LOG.md", "UPDATE_README.md")
-    )
+    documents = Path("README.md").read_text(encoding="utf-8")
 
     for required_text in (
         "CVE-2026-45829",
@@ -219,7 +217,12 @@ def test_chroma_waiver_rationale_and_removal_conditions_are_documented():
         "CVE-2026-45831",
         "CVE-2026-45833",
         "CVSS 9.3",
-        "2026-10-01",
+        "2026-11-24",
+        "2026-12-24",
+        "PYSEC-2026-3813",
+        "PYSEC-2026-3814",
+        "PYSEC-2026-3815",
+        "PYSEC-2026-4174",
         "PersistentClient",
         "HttpClient",
         "embedding_function",
@@ -314,3 +317,21 @@ def test_runtime_collection_calls_receive_owned_hash_embedding(tmp_path, monkeyp
     for kwargs in calls["collections"]:
         assert isinstance(kwargs["embedding_function"], HashEmbeddingFunction)
         assert kwargs["embedding_function"].name() == "github_code_rag_hash"
+
+
+
+def test_security_dependency_pins_cover_transformers_and_gitpython_fixes():
+    from packaging.requirements import Requirement
+    from packaging.version import Version
+
+    requirements = {
+        item.name.lower(): item
+        for line in Path("requirements.txt").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+        for item in [Requirement(line)]
+    }
+    fixed_versions = {"gitpython": Version("3.2.0"), "transformers": Version("5.10.0")}
+    for name, minimum in fixed_versions.items():
+        pin, = requirements[name].specifier
+        assert pin.operator == "=="
+        assert Version(pin.version) >= minimum
