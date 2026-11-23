@@ -1,10 +1,13 @@
 import hashlib
 import json
+import math
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from threading import Lock, RLock
+from uuid import UUID
 
 import chromadb
 from chromadb.api.models.Collection import Collection
@@ -38,6 +41,29 @@ class IndexResult:
     removed_files_count: int
 
 
+@dataclass(frozen=True)
+class LexicalIndex:
+    chunks: list[dict]
+    bm25: BM25Okapi | None
+
+
+# Stripes bound the number of locks held by the store regardless of repository count.
+_repository_index_locks = tuple(RLock() for _ in range(64))
+_lexical_cache_lock = Lock()
+_lexical_cache: OrderedDict[tuple[str, UUID, str], LexicalIndex] = OrderedDict()
+
+
+def _repository_index_lock(repository_id: str):
+    return _repository_index_locks[hash(repository_id) % len(_repository_index_locks)]
+
+
+def _invalidate_lexical_cache(repository_id: str) -> None:
+    with _lexical_cache_lock:
+        for key in list(_lexical_cache):
+            if key[0] == repository_id:
+                del _lexical_cache[key]
+
+
 @lru_cache
 def get_chroma_client() -> chromadb.PersistentClient:
     settings = get_settings()
@@ -48,6 +74,8 @@ def get_chroma_client() -> chromadb.PersistentClient:
 
 
 def close_chroma_client() -> None:
+    with _lexical_cache_lock:
+        _lexical_cache.clear()
     if get_chroma_client.cache_info().currsize == 0:
         return
     client = get_chroma_client()
@@ -122,26 +150,28 @@ def recreate_collection(repository_id: str) -> Collection:
 
 def delete_repository_collections(repository_id: str) -> int:
     """Delete only Chroma collections explicitly owned by a repository."""
-    client = get_chroma_client()
-    deleted = 0
-    try:
-        collections = client.list_collections()
-    except Exception as exc:
-        raise VectorStoreError("failed to enumerate repository vector collections") from exc
-
-    for collection in collections:
-        metadata = getattr(collection, "metadata", None) or {}
-        if metadata.get("repository_id") != repository_id:
-            continue
-        name = getattr(collection, "name", "")
-        if not name:
-            continue
+    with _repository_index_lock(repository_id):
+        _invalidate_lexical_cache(repository_id)
+        client = get_chroma_client()
+        deleted = 0
         try:
-            client.delete_collection(name=name)
+            collections = client.list_collections()
         except Exception as exc:
-            raise VectorStoreError("failed to delete repository vector collection") from exc
-        deleted += 1
-    return deleted
+            raise VectorStoreError("failed to enumerate repository vector collections") from exc
+
+        for collection in collections:
+            metadata = getattr(collection, "metadata", None) or {}
+            if metadata.get("repository_id") != repository_id:
+                continue
+            name = getattr(collection, "name", "")
+            if not name:
+                continue
+            try:
+                client.delete_collection(name=name)
+            except Exception as exc:
+                raise VectorStoreError("failed to delete repository vector collection") from exc
+            deleted += 1
+        return deleted
 
 
 def make_chunk_id(repository_id: str, chunk: DocumentChunk) -> str:
@@ -232,11 +262,18 @@ def add_chunks_to_collection(collection: Collection, repository_id: str, chunks:
 
 
 def index_chunks(repository_id: str, chunks: list[DocumentChunk]) -> int:
-    collection = recreate_collection(repository_id)
-    return add_chunks_to_collection(collection, repository_id, chunks)
+    with _repository_index_lock(repository_id):
+        _invalidate_lexical_cache(repository_id)
+        collection = recreate_collection(repository_id)
+        return add_chunks_to_collection(collection, repository_id, chunks)
 
 
 def index_chunks_incremental(repository_id: str, chunks: list[DocumentChunk]) -> IndexResult:
+    with _repository_index_lock(repository_id):
+        return _index_chunks_incremental(repository_id, chunks)
+
+
+def _index_chunks_incremental(repository_id: str, chunks: list[DocumentChunk]) -> IndexResult:
     current_manifest = build_vector_index_manifest(repository_id, chunks)
     previous_manifest = load_vector_index_manifest(repository_id)
     files_indexed = len(current_manifest["files"])
@@ -249,6 +286,7 @@ def index_chunks_incremental(repository_id: str, chunks: list[DocumentChunk]) ->
     )
 
     if not can_incremental:
+        _invalidate_lexical_cache(repository_id)
         collection = recreate_collection(repository_id)
         chunks_written = add_chunks_to_collection(collection, repository_id, chunks)
         save_vector_index_manifest(repository_id, current_manifest)
@@ -263,6 +301,7 @@ def index_chunks_incremental(repository_id: str, chunks: list[DocumentChunk]) ->
 
     collection = get_or_create_collection(repository_id)
     if chunks and collection.count() == 0:
+        _invalidate_lexical_cache(repository_id)
         collection = recreate_collection(repository_id)
         chunks_written = add_chunks_to_collection(collection, repository_id, chunks)
         save_vector_index_manifest(repository_id, current_manifest)
@@ -295,6 +334,7 @@ def index_chunks_incremental(repository_id: str, chunks: list[DocumentChunk]) ->
             removed_files_count=0,
         )
 
+    _invalidate_lexical_cache(repository_id)
     delete_ids: list[str] = []
     for file_path in [*removed_files, *changed_files]:
         delete_ids.extend(previous_files.get(file_path, {}).get("chunk_ids", []))
@@ -319,10 +359,20 @@ def index_chunks_incremental(repository_id: str, chunks: list[DocumentChunk]) ->
     )
 
 
-def tokenize_text(text: str) -> list[str]:
-    tokens = re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*|[\u4e00-\u9fff]|\d+", text.lower())
-    return [token for token in tokens if token.strip()]
+HAN_TEXT_PATTERN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
+TOKEN_PATTERN = re.compile(r"[a-z][a-z0-9_]*|[\u3400-\u4dbf\u4e00-\u9fff]+|\d+")
 
+
+def tokenize_text(text: str) -> list[str]:
+    tokens = []
+    for token in TOKEN_PATTERN.findall(text.lower()):
+        if HAN_TEXT_PATTERN.fullmatch(token):
+            tokens.extend(token[index:index + 2] for index in range(len(token) - 1))
+        else:
+            tokens.append(token)
+            if "_" in token:
+                tokens.extend(part for part in token.split("_") if part)
+    return tokens
 
 def expand_query_keywords(question: str) -> set[str]:
     question_lower = question.lower()
@@ -436,68 +486,28 @@ def detect_query_intents(question: str) -> set[str]:
 
 def path_priority(file_path: str, intents: set[str] | None = None) -> float:
     intents = intents or set()
-    path = file_path.lower()
+    segments = file_path.replace("\\", "/").lower().split("/")
+    filename = segments[-1]
+    names = set(segments[:-1])
+    names.update(re.split(r"[._-]", filename))
     score = 0.0
-    if path == "readme.md":
+    if filename == "readme.md" and len(segments) == 1:
         score += 42 if "overview" in intents else 18
-    elif path.endswith("/readme.md") or "readme" in path:
+    elif "readme" in names:
         score += 6 if "overview" in intents else 9
-    if "overview" in intents and path.count("/") >= 2 and path.endswith("readme.md"):
+    if "overview" in intents and len(segments) >= 3 and filename == "readme.md":
         score -= 8
-    if any(name in path for name in ("overview", "introduction", "architecture", "guide", "docs/", "spec")):
+    if names & {"overview", "introduction", "architecture", "guide", "docs", "spec"}:
         score += 5
-    if any(name in path for name in ("quickstart", "install", "installation", "contributing", "development")):
+    if names & {"quickstart", "install", "installation", "contributing", "development"}:
         score += 5
-    if path.endswith(("pyproject.toml", "setup.py", "requirements.txt", "mkdocs.yml", "package.json")):
+    if filename in {"pyproject.toml", "setup.py", "requirements.txt", "mkdocs.yml", "package.json"}:
         score += 3
-    if any(noisy in path for noisy in ("test", "tests", "snapshot", "fixture", "fixtures", "locale", "/de/", "/ru/", "/uk/", "/ko/")):
+    if names & {"test", "tests", "snapshot", "fixture", "fixtures", "locale", "de", "ru", "uk", "ko"}:
         score -= 6
-    if "overview" in intents and any(noisy in path for noisy in ("tool", "tools", "lint", "bench", "script", "scripts")):
+    if "overview" in intents and names & {"tool", "tools", "lint", "bench", "script", "scripts"}:
         score -= 4
     return score
-
-
-def keyword_score(question: str, document: str, metadata: dict) -> float:
-    keywords = expand_query_keywords(question)
-    if not keywords:
-        return 0.0
-
-    intents = detect_query_intents(question)
-    file_path = metadata.get("file_path", "")
-    text = f"{file_path}\n{document}".lower()
-    score = 0.0
-    for keyword in keywords:
-        keyword_lower = keyword.lower()
-        count = text.count(keyword_lower)
-        if count:
-            score += 1.0 + min(count, 10) * 1.4
-            if keyword_lower in file_path.lower():
-                score += 2.5
-
-    score += path_priority(file_path, intents)
-    return score
-
-
-def bm25_score(question_terms: set[str], document: str, metadata: dict, average_length: float, intents: set[str]) -> float:
-    if not question_terms:
-        return 0.0
-    tokens = tokenize_text(f"{metadata.get('file_path', '')}\n{document}")
-    if not tokens:
-        return 0.0
-    counts = Counter(tokens)
-    length = len(tokens)
-    k1 = 1.5
-    b = 0.75
-    score = 0.0
-
-    for term in question_terms:
-        term_frequency = counts.get(term.lower(), 0)
-        if term_frequency == 0:
-            continue
-        denominator = term_frequency + k1 * (1 - b + b * length / max(average_length, 1))
-        score += (term_frequency * (k1 + 1)) / denominator
-
-    return score + path_priority(metadata.get("file_path", ""), intents)
 
 
 def get_all_collection_chunks(collection: Collection, repository_id: str) -> list[dict]:
@@ -518,36 +528,48 @@ def get_all_collection_chunks(collection: Collection, repository_id: str) -> lis
     ]
 
 
-def retrieve_keyword_chunks(all_chunks: list[dict], question: str, limit: int) -> list[dict]:
-    question_terms = expand_query_keywords(question)
-    intents = detect_query_intents(question)
-    token_lengths = [len(tokenize_text(chunk["content"])) for chunk in all_chunks]
-    average_length = sum(token_lengths) / max(len(token_lengths), 1)
-
-    scored_chunks: list[dict] = []
-    for chunk in all_chunks:
-        score = keyword_score(question, chunk["content"], chunk["metadata"])
-        score += bm25_score(question_terms, chunk["content"], chunk["metadata"], average_length, intents) * 2.0
-        if score <= 0:
-            continue
-        scored_chunks.append(
-            {
-                "content": chunk["content"],
-                "metadata": chunk["metadata"],
-                "distance": -score,
-            }
-        )
-
-    scored_chunks.sort(key=lambda chunk: chunk["distance"])
-    return scored_chunks[:limit]
-
-
-def retrieve_bm25_chunks(all_chunks: list[dict], query: str, limit: int) -> list[dict]:
+def build_lexical_index(chunks: list[dict]) -> LexicalIndex:
     tokenized_documents = [
-        tokenize_text(f"{chunk['metadata'].get('file_path', '')}\n{chunk['content']}")
-        for chunk in all_chunks
+        tokenize_text(f"{chunk['metadata'].get('file_path', '')} {chunk['content']}")
+        for chunk in chunks
     ]
-    if not tokenized_documents:
+    if not any(tokenized_documents):
+        return LexicalIndex(chunks, None)
+    bm25 = BM25Okapi(tokenized_documents)
+    # Positive IDF keeps common terms searchable even in small repositories.
+    frequencies = Counter(term for document in bm25.doc_freqs for term in document)
+    for term, frequency in frequencies.items():
+        bm25.idf[term] = math.log1p((bm25.corpus_size - frequency + 0.5) / (frequency + 0.5))
+    return LexicalIndex(chunks, bm25)
+
+
+def _load_lexical_index(collection: Collection, repository_id: str) -> LexicalIndex:
+    capacity = get_settings().bm25_cache_capacity
+    path = vector_index_manifest_path(repository_id)
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest() if capacity else None
+    except FileNotFoundError:
+        digest = None
+    if digest is None:
+        return build_lexical_index(get_all_collection_chunks(collection, repository_id))
+
+    key = (repository_id, collection.id, digest)
+    with _lexical_cache_lock:
+        cached = _lexical_cache.get(key)
+        if cached is not None:
+            _lexical_cache.move_to_end(key)
+            return cached
+
+    index = build_lexical_index(get_all_collection_chunks(collection, repository_id))
+    with _lexical_cache_lock:
+        _lexical_cache[key] = index
+        while len(_lexical_cache) > capacity:
+            _lexical_cache.popitem(last=False)
+    return index
+
+
+def retrieve_bm25_chunks(index: LexicalIndex, query: str, limit: int) -> list[dict]:
+    if index.bm25 is None:
         return []
 
     query_terms = list(expand_query_keywords(query))
@@ -557,11 +579,10 @@ def retrieve_bm25_chunks(all_chunks: list[dict], query: str, limit: int) -> list
         return []
 
     intents = detect_query_intents(query)
-    bm25 = BM25Okapi(tokenized_documents)
-    scores = bm25.get_scores(query_terms)
+    scores = index.bm25.get_scores(query_terms)
 
     scored: list[tuple[float, dict]] = []
-    for score, chunk in zip(scores, all_chunks):
+    for score, chunk in zip(scores, index.chunks, strict=True):
         combined_score = float(score) + path_priority(chunk["metadata"].get("file_path", ""), intents)
         if combined_score <= 0:
             continue
@@ -710,21 +731,22 @@ def retrieve_relevant_chunks(repository_id: str, question: str | list[str]) -> l
     queries = normalize_queries(question)
     primary_query = queries[0] if queries else ""
 
-    try:
-        collection = get_repository_collection(repository_id)
-        if collection.count() == 0:
-            return []
-        candidate_k = max(settings.retrieval_candidate_k, settings.retrieval_k)
-        all_chunks = get_all_collection_chunks(collection, repository_id)
-        anchor_chunks = retrieve_anchor_chunks(all_chunks, primary_query, settings.retrieval_k)
-        keyword_chunks = retrieve_keyword_chunks(all_chunks, primary_query, candidate_k)
-        bm25_sets = [retrieve_bm25_chunks(all_chunks, query, candidate_k) for query in queries]
-        bm25_chunks = rrf_fuse(bm25_sets, candidate_k)
-        vector_chunks = retrieve_vector_chunks(collection, queries, candidate_k)
-    except RepositoryNotFoundError:
-        raise
-    except Exception as exc:
-        raise VectorStoreError(f"failed to retrieve chunks: {exc}") from exc
+    with _repository_index_lock(repository_id):
+        try:
+            collection = get_repository_collection(repository_id)
+            if collection.count() == 0:
+                return []
+            candidate_k = max(settings.retrieval_candidate_k, settings.retrieval_k)
+            index = _load_lexical_index(collection, repository_id)
+            all_chunks = index.chunks
+            anchor_chunks = retrieve_anchor_chunks(all_chunks, primary_query, settings.retrieval_k)
+            bm25_sets = [retrieve_bm25_chunks(index, query, candidate_k) for query in queries]
+            bm25_chunks = rrf_fuse(bm25_sets, candidate_k)
+            vector_chunks = retrieve_vector_chunks(collection, queries, candidate_k)
+        except RepositoryNotFoundError:
+            raise
+        except Exception as exc:
+            raise VectorStoreError(f"failed to retrieve chunks: {exc}") from exc
 
     chunks: list[dict] = []
     seen: set[tuple[str, int]] = set()
@@ -732,7 +754,7 @@ def retrieve_relevant_chunks(repository_id: str, question: str | list[str]) -> l
     for chunk in anchor_chunks:
         add_chunk(chunks, seen, chunk)
 
-    fused_chunks = rrf_fuse([keyword_chunks, bm25_chunks, vector_chunks], candidate_k)
+    fused_chunks = rrf_fuse([bm25_chunks, vector_chunks], candidate_k)
     for chunk in fused_chunks:
         add_chunk(chunks, seen, chunk)
 

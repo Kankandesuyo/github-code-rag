@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     chunk_overlap: int = 200
     retrieval_k: int = 10
     retrieval_candidate_k: int = 30
+    bm25_cache_capacity: int = Field(default=4, ge=0, le=64)
     context_expansion_window: int = 1
     enable_query_expansion: bool = True
     enable_hyde: bool = True

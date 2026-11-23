@@ -119,6 +119,9 @@ EMBEDDING_PROVIDER=sentence_transformers
 EMBEDDING_MODEL_NAME=BAAI/bge-small-en-v1.5
 ```
 
+默认的 `BAAI/bge-small-en-v1.5` 是英文 embedding 模型。中文仓库建议配置多语言的 `BAAI/bge-m3` 或中文的 `BAAI/bge-small-zh-v1.5`，然后重新导入仓库以重建索引。BM25 中文检索使用相邻双字切分。
+
+
 如果本地模型安装或下载失败，可以临时回退：
 
 ```env
@@ -158,6 +161,7 @@ MAX_CONCURRENT_ONLINE_CHATS=1
 
 说明：
 
+- `BM25_CACHE_CAPACITY` 控制进程内最多缓存的仓库词法索引数量，默认 4，设为 0 可关闭缓存。
 - `RETRIEVAL_CANDIDATE_K` 控制第一阶段召回候选池大小，默认 30。
 - `ENABLE_LOCAL_RERANK=true` 会对候选片段做本地二次排序，不额外调用模型。
 - `ENABLE_LLM_RERANK=true` 会在本地 rerank 后再调用一次 DeepSeek 对证据打分，质量可能更好，但延迟和调用成本更高。
@@ -290,7 +294,7 @@ docker compose ps
 
 页面提供两个边界明确的模式，新手不需要先阅读 API 文档：
 
-1. 默认“联网问答”：粘贴公开 GitHub 仓库地址后直接提问。后端按安全过滤和资源预算读取有限文件，在内存中执行 BM25/关键词检索与排序；请求结束后不会留下源码快照、manifest 或 Chroma 集合。
+1. 默认“联网问答”：粘贴公开 GitHub 仓库地址后直接提问。后端按安全过滤和资源预算读取有限文件，在内存中执行 BM25 检索与排序；请求结束后不会留下源码快照、manifest 或 Chroma 集合。
 2. 需要多轮复用、项目报告、README 或调用图时，再手动切换到“深度分析”，点击“导入并建立索引”。只有这一步会把过滤后的快照和索引写入本机。
 3. 深度导入成功后，知识库列表会保存项目入口。浏览器只记住最后选择的 `repository_id`，不会保存联网仓库 URL、密码、Session、CSRF token 或 API Key。
 4. GitHub 来源标签可直接打开对应文件与行号；ZIP 来源没有远程地址，继续显示为不可点击标签。

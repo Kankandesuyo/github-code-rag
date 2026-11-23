@@ -13,10 +13,10 @@ from app.services.repo_loader import (
 )
 from app.services.vector_store import (
     add_chunk,
+    build_lexical_index,
     expand_neighbor_chunks,
     retrieve_anchor_chunks,
     retrieve_bm25_chunks,
-    retrieve_keyword_chunks,
     rrf_fuse,
 )
 from app.config import get_settings
@@ -61,15 +61,9 @@ def retrieve_chunks_in_memory(
         question,
         settings.retrieval_k,
     )
-    keyword_sets = [
-        retrieve_keyword_chunks(all_chunks, query, candidate_k)
-        for query in queries
-    ]
-    bm25_sets = [
-        retrieve_bm25_chunks(all_chunks, query, candidate_k)
-        for query in queries
-    ]
-    fused_chunks = rrf_fuse([*keyword_sets, *bm25_sets], candidate_k)
+    index = build_lexical_index(all_chunks)
+    bm25_sets = [retrieve_bm25_chunks(index, query, candidate_k) for query in queries]
+    fused_chunks = rrf_fuse(bm25_sets, candidate_k)
 
     selected: list[dict] = []
     seen: set[tuple[str, int]] = set()
