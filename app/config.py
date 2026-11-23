@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     max_repository_requests: int = Field(default=2500, ge=1)
     repository_import_timeout_seconds: int = Field(default=300, ge=1)
     max_concurrent_imports: int = Field(default=1, ge=1, le=1)
+    enable_hyde_for_followups: bool = False
     max_chat_history_characters: int = Field(default=12000, ge=1)
     max_concurrent_chat_streams: int = Field(default=4, ge=1)
     max_concurrent_online_chats: int = Field(default=1, ge=1, le=4)
