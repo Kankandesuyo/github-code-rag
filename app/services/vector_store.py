@@ -547,13 +547,17 @@ def build_lexical_index(chunks: list[dict]) -> LexicalIndex:
     return LexicalIndex(chunks, bm25)
 
 
+def _lexical_manifest_digest(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return None
+
+
 def _load_lexical_index(collection: Collection, repository_id: str) -> LexicalIndex:
     capacity = get_settings().bm25_cache_capacity
     path = vector_index_manifest_path(repository_id)
-    try:
-        digest = hashlib.sha256(path.read_bytes()).hexdigest() if capacity else None
-    except FileNotFoundError:
-        digest = None
+    digest = _lexical_manifest_digest(path) if capacity else None
     if digest is None:
         return build_lexical_index(get_all_collection_chunks(collection, repository_id))
 
@@ -565,6 +569,10 @@ def _load_lexical_index(collection: Collection, repository_id: str) -> LexicalIn
             return cached
 
     index = build_lexical_index(get_all_collection_chunks(collection, repository_id))
+    # In-process indexing holds the repository lock. Recheck the manifest in case
+    # another writer replaced it while the collection snapshot was being loaded.
+    if _lexical_manifest_digest(path) != digest:
+        return index
     with _lexical_cache_lock:
         _lexical_cache[key] = index
         while len(_lexical_cache) > capacity:

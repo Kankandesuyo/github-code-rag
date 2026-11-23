@@ -1,4 +1,6 @@
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -121,3 +123,31 @@ def test_chinese_tokenization_and_path_segment_matches():
         assert store.path_priority(path) == 0
     for path in ("tests/api.py", "src/test_api.py", "src/api.test.js", "fixtures/sample.py"):
         assert store.path_priority(path) < 0
+
+
+
+def test_bm25_does_not_cache_snapshot_when_manifest_changes_during_collection_read(hash_index, monkeypatch):
+    repository_id = "changing-index"
+    collection = SimpleNamespace(id=uuid4())
+    store.save_vector_index_manifest(repository_id, {"revision": "before"})
+    stale = [{"content": "outdated symbol", "metadata": {"file_path": "old.py"}}]
+    fresh = [{"content": "current symbol", "metadata": {"file_path": "new.py"}}]
+    calls = []
+
+    def read_chunks(current_collection, current_repository_id):
+        assert current_collection is collection
+        assert current_repository_id == repository_id
+        calls.append(current_repository_id)
+        if len(calls) == 1:
+            store.save_vector_index_manifest(repository_id, {"revision": "after"})
+            return stale
+        return fresh
+
+    monkeypatch.setattr(store, "get_all_collection_chunks", read_chunks)
+    assert store._load_lexical_index(collection, repository_id).chunks == stale
+    assert all(key[0] != repository_id for key in store._lexical_cache)
+
+    fresh_index = store._load_lexical_index(collection, repository_id)
+    assert fresh_index.chunks == fresh
+    assert store._load_lexical_index(collection, repository_id) is fresh_index
+    assert calls == [repository_id, repository_id]
