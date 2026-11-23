@@ -1,8 +1,9 @@
 from pathlib import Path
 from collections import deque
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 import asyncio
 import hashlib
+import json
 import logging
 import secrets
 from tempfile import TemporaryDirectory
@@ -11,8 +12,9 @@ import time
 from typing import Annotated
 from urllib.parse import quote, urlsplit, urlunsplit
 
+import anyio
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -59,6 +61,7 @@ from app.services.llm_service import (
     build_retrieval_queries,
     redact_sensitive_text,
     rerank_chunks,
+    stream_answer_question,
 )
 from app.services.online_search import search_online_repository
 from app.services.archive_loader import (
@@ -80,6 +83,7 @@ from app.services.repository_catalog import (
     InvalidRepositoryIdError,
     RepositoryCatalogService,
     RepositoryNotFoundError,
+    RepositorySummary,
     resolve_repository_path,
 )
 from app.services.vector_store import (
@@ -113,6 +117,7 @@ _rate_limit_lock = Lock()
 _rate_limit_buckets: dict[str, deque[float]] = {}
 _repository_import_slots = BoundedSemaphore(get_settings().max_concurrent_imports)
 _online_chat_slots = BoundedSemaphore(get_settings().max_concurrent_online_chats)
+_chat_stream_slots = BoundedSemaphore(get_settings().max_concurrent_chat_streams)
 SAFE_REPOSITORY_IMPORT_DETAILS = frozenset(
     {
         "repository import deadline exceeded",
@@ -708,40 +713,130 @@ def chat_online(request: OnlineChatRequest) -> OnlineChatResponse:
         _online_chat_slots.release()
 
 
-@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key), Depends(enforce_rate_limit)])
-def chat(request: ChatRequest) -> ChatResponse:
+def chat_repository(repository_id: str) -> RepositorySummary:
     try:
-        summary = repository_catalog_service.get_repository(request.repository_id)
-        chunks, logs = rag_agent.search(request.repository_id, request.question)
-        if not chunks:
-            return ChatResponse(answer="无法从代码库中找到可靠依据。", sources=[], logs=logs)
-
-        writer_started = time.perf_counter()
-        answer = answer_question(request.question, chunks)
-        logs.append(
-            AgentLog(
-                agent="AnswerGenerator",
-                action="Generating grounded response",
-                duration_ms=round((time.perf_counter() - writer_started) * 1000, 2),
-            )
-        )
-    except VectorStoreError as exc:
-        raise HTTPException(status_code=500, detail="vector store operation failed") from exc
-    except LLMServiceError as exc:
-        raise HTTPException(status_code=500, detail="answer generation failed") from exc
+        return repository_catalog_service.get_repository(repository_id)
     except InvalidRepositoryIdError as exc:
         raise HTTPException(status_code=400, detail="invalid repository_id") from exc
-    except (RepositoryNotFoundError, FileNotFoundError) as exc:
+    except RepositoryNotFoundError as exc:
         raise HTTPException(status_code=404, detail="repository not found") from exc
+
+
+def retrieve_chat_evidence(request: ChatRequest) -> tuple[list[dict], list[AgentLog]]:
+    previous_question = next(
+        (item.content for item in reversed(request.history) if item.role == "user"), ""
+    )
+    query = request.question
+    if previous_question:
+        query += f"\n此前问题：{redact_sensitive_text(previous_question)}"
+    try:
+        return rag_agent.search(request.repository_id, query)
+    except VectorStoreError as exc:
+        raise HTTPException(status_code=500, detail="vector store operation failed") from exc
+    except (RepositoryNotFoundError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="repository index not found") from exc
     except Exception as exc:
         logger.error("code question failed repository_id=%s error_type=%s", request.repository_id, type(exc).__name__)
         raise HTTPException(status_code=500, detail="code question failed") from exc
 
+
+def answer_log(started: float) -> AgentLog:
+    return AgentLog(
+        agent="AnswerGenerator",
+        action="Generating grounded response",
+        duration_ms=round((time.perf_counter() - started) * 1000, 2),
+    )
+
+
+CHAT_NO_EVIDENCE = "无法从代码库中找到可靠依据。"
+
+
+@app.post("/chat", response_model=ChatResponse, dependencies=[Depends(require_api_key), Depends(enforce_rate_limit)])
+def chat(request: ChatRequest) -> ChatResponse:
+    summary = chat_repository(request.repository_id)
+    chunks, logs = retrieve_chat_evidence(request)
+    if not chunks:
+        return ChatResponse(answer=CHAT_NO_EVIDENCE, sources=[], logs=logs)
+
+    writer_started = time.perf_counter()
+    try:
+        history = {"history": request.history} if request.history else {}
+        answer = answer_question(request.question, chunks, **history)
+    except LLMServiceError as exc:
+        raise HTTPException(status_code=500, detail="answer generation failed") from exc
+    except Exception as exc:
+        logger.error("code question failed repository_id=%s error_type=%s", request.repository_id, type(exc).__name__)
+        raise HTTPException(status_code=500, detail="code question failed") from exc
     return ChatResponse(
         answer=answer,
         sources=build_chat_sources(chunks, summary.github_url, summary.commit_sha),
-        logs=logs,
+        logs=[*logs, answer_log(writer_started)],
     )
+
+
+class ChatStreamResponse(StreamingResponse):
+    media_type = "text/event-stream"
+
+    async def __call__(self, scope, receive, send):
+        # Listen for disconnects even while waiting on the upstream model.
+        async with aclosing(self.body_iterator), anyio.create_task_group() as group:
+
+            async def send_events():
+                try:
+                    await self.stream_response(send)
+                except OSError as exc:
+                    logger.debug("chat stream disconnected error_type=%s", type(exc).__name__)
+                finally:
+                    group.cancel_scope.cancel()
+
+            group.start_soon(send_events)
+            await self.listen_for_disconnect(receive)
+            group.cancel_scope.cancel()
+
+
+def sse_event(name: str, payload: dict) -> str:
+    return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.post(
+    "/chat/stream",
+    response_class=ChatStreamResponse,
+    dependencies=[Depends(require_api_key), Depends(enforce_rate_limit)],
+    responses={200: {"content": {"text/event-stream": {}}}},
+)
+def chat_stream(request: ChatRequest) -> ChatStreamResponse:
+    summary = chat_repository(request.repository_id)
+
+    async def events():
+        if not _chat_stream_slots.acquire(blocking=False):
+            yield sse_event("error", {"message": "chat stream capacity reached"})
+            return
+        try:
+            chunks, logs = await run_in_threadpool(retrieve_chat_evidence, request)
+            sources = build_chat_sources(chunks, summary.github_url, summary.commit_sha)
+            if not chunks:
+                yield sse_event("delta", {"text": CHAT_NO_EVIDENCE})
+            else:
+                writer_started = time.perf_counter()
+                async with aclosing(stream_answer_question(request.question, chunks, history=request.history)) as stream:
+                    async for delta in stream:
+                        yield sse_event("delta", {"text": delta})
+                logs = [*logs, answer_log(writer_started)]
+            yield sse_event("done", {
+                "sources": [source.model_dump() for source in sources],
+                "logs": [log.model_dump() for log in logs],
+            })
+        except HTTPException as exc:
+            yield sse_event("error", {"message": exc.detail})
+        except LLMServiceError:
+            yield sse_event("error", {"message": "answer generation failed"})
+        except Exception as exc:
+            logger.error("chat stream failed repository_id=%s error_type=%s", request.repository_id, type(exc).__name__)
+            yield sse_event("error", {"message": "code question failed"})
+        finally:
+            _chat_stream_slots.release()
+
+    return ChatStreamResponse(events(), headers={"X-Accel-Buffering": "no"})
 
 
 @app.get(

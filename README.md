@@ -7,7 +7,7 @@
 功能：
 
 - 默认“联网问答”：输入公开 GitHub 仓库 URL 后，在单次请求内临时读取、切块和检索，不 clone、不下载完整 archive，也不保存源码快照、manifest 或 Chroma 索引
-- 可选“深度分析”：显式导入后保存经过安全过滤的文本快照与向量索引，支持连续问答、报告和 README 生成
+- 可选“深度分析”：显式导入后保存经过安全过滤的文本快照与向量索引，支持同一仓库的连续问答、报告和 README 生成
 - 读取常见代码和文档文件
 - 过滤依赖目录、构建产物、锁文件、二进制文件和 `.env`
 - 使用 LangChain 切分文本
@@ -48,22 +48,30 @@ github-code-rag/
 │  │  └─ workflow.py
 │  ├─ services/
 │  │  ├─ repo_loader.py
+│  │  ├─ archive_loader.py
+│  │  ├─ repository_catalog.py
 │  │  ├─ online_search.py
 │  │  ├─ file_parser.py
 │  │  ├─ vector_store.py
 │  │  ├─ llm_service.py
 │  │  ├─ manifest_service.py
 │  │  └─ report_service.py
+│  ├─ security/                # 登录、CSRF 与审计
 │  ├─ static/
 │  │  ├─ index.html
 │  │  ├─ styles.css
 │  │  └─ app.js
 │  └─ utils/
-│     └─ file_utils.py
+│     ├─ atomic_files.py
+│     ├─ file_utils.py
+│     └─ repository_ids.py
 ├─ docs/
-│  └─ ARCHITECTURE.md
+│  ├─ ARCHITECTURE.md
+│  └─ images/                  # 工作台截图
+├─ scripts/                     # 维护与验证脚本
 ├─ tests/
-│  └─ test_v2_agents.py
+│  ├─ eval/                    # 检索 Recall@3 评估
+│  └─ test_*.py
 ├─ repos/
 ├─ chroma_db/
 ├─ requirements.txt
@@ -72,6 +80,8 @@ github-code-rag/
 ```
 
 架构说明见：[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+
+[桌面问答](docs/images/ui-chat-desktop.png) · [移动端问答](docs/images/ui-chat-mobile.png) · [Agent 日志](docs/images/ui-v2-agent.png) · [报告预览](docs/images/ui-v2-artifact.png)
 
 ## 环境要求
 
@@ -204,6 +214,8 @@ LOGIN_RATE_LIMIT_MAX_ATTEMPTS=5
 生产 HTTPS 环境必须设置 `AUTH_COOKIE_SECURE=true` 和 `FORCE_HTTPS=true`。浏览器使用 `HttpOnly + SameSite=Strict` 签名 Cookie，写操作还需要 Session 中的 CSRF token。`APP_API_KEY` 可继续供脚本或自动化客户端通过 `X-API-Key` 使用。
 
 ### 部署威胁模型与生产基线
+
+生产环境只支持单 worker 部署。请求限流、并发槽位和登录失败计数桶（登录桶）都保存在单进程内存，多个 worker 或副本会各自计数。使用 `uvicorn app.main:app --workers 1`，容器部署也只运行一个应用进程和一个副本。
 
 **本地威胁模型**：默认 `DEPLOYMENT_MODE=local` 只面向可信开发者的本机回环地址，允许不配置登录，方便调试。它不承诺抵御同一局域网内的恶意访问者，也不应直接绑定公网地址；Compose 默认只发布 `127.0.0.1:8000`。
 
@@ -408,6 +420,10 @@ GitHub 网页目录 -> 页面内嵌文件树数据 -> raw.githubusercontent.com 
 ```
 
 ### 4. 已导入知识库问答
+
+网页在深度分析模式下使用 `POST /chat/stream`，按 SSE 的 `delta` 事件显示正文，在 `done` 事件中接收来源和日志。`POST /chat` 仍返回完整 JSON。
+
+两种接口都接受可选 `history`，每次最多 12 条历史消息，每条最多 4000 个字符，角色为 `user` 或 `assistant`。网页只在当前知识库会话内存中保留最近六轮成功问答。切换仓库、清空或刷新页面会重置历史。联网问答仍然按单次请求处理。
 
 将上一步返回的 `repository_id` 填入请求：
 

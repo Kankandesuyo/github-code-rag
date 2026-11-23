@@ -155,3 +155,16 @@ def test_security_delivery_boundaries_are_documented():
         "共享队列",
     ):
         assert required_text in documents
+
+
+
+def test_readme_documents_single_worker_and_relocated_images():
+    readme = read("README.md")
+    assert "只支持单 worker" in readme
+    assert "uvicorn app.main:app --workers 1" in readme
+    assert all(term in readme for term in ("请求限流", "并发槽位", "登录桶", "单进程内存"))
+    for filename in ("ui-chat-desktop.png", "ui-chat-mobile.png", "ui-v2-agent.png", "ui-v2-artifact.png"):
+        path = Path("docs/images") / filename
+        assert path.is_file()
+        assert path.as_posix() in readme
+        assert not Path(filename).exists()

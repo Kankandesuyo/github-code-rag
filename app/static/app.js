@@ -60,6 +60,8 @@ const state = {
   zipFile: null,
   workspaceMode: "online",
   onlineGithubUrl: "",
+  history: [],
+  chatRequest: null,
 };
 
 function getWelcomeMessage() {
@@ -599,6 +601,10 @@ function closeArtifact() {
 }
 
 function resetMessages() {
+  state.history = [];
+  state.chatRequest?.abort();
+  state.chatRequest = null;
+  sendButton.disabled = false;
   messages.innerHTML = "";
   appendMessage("assistant", getWelcomeMessage());
 }
@@ -771,6 +777,58 @@ async function uploadZipArchive() {
   }
 }
 
+function rememberChatTurn(question, answer) {
+  state.history = [
+    ...state.history.slice(-10),
+    { role: "user", content: question },
+    { role: "assistant", content: Array.from(answer).slice(0, 4000).join("") },
+  ];
+}
+
+async function requestChatStream(options, onDelta) {
+  const response = await fetch("/chat/stream", options);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    options.signal?.throwIfAborted();
+    throw new Error(friendlyError(response.status, typeof data.detail === "string" ? data.detail : ""));
+  }
+  if (!response.body) throw new Error("未收到问答数据。");
+
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let answer = "";
+  let buffer = "";
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      options.signal?.throwIfAborted();
+      if (done) break;
+      buffer += value;
+      let separator;
+      while ((separator = /\r?\n\r?\n/.exec(buffer))) {
+        const frame = buffer.slice(0, separator.index);
+        buffer = buffer.slice(separator.index + separator[0].length);
+        const lines = frame.split(/\r?\n/);
+        const event = lines.find((line) => line.startsWith("event: "))?.slice(7);
+        const rawData = lines.filter((line) => line.startsWith("data: ")).map((line) => line.slice(6)).join("\n");
+        if (!rawData) continue;
+        const data = JSON.parse(rawData);
+        if (event === "delta") {
+          answer += data.text;
+          onDelta(answer);
+        } else if (event === "done") {
+          return { answer, sources: data.sources, logs: data.logs };
+        } else if (event === "error") {
+          throw new Error(friendlyError(500, data.message));
+        }
+      }
+    }
+    throw new Error("连接中断，问答未完成。");
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
 async function sendQuestion(event) {
   event.preventDefault();
   const question = questionInput.value.trim();
@@ -779,7 +837,6 @@ async function sendQuestion(event) {
   }
 
   const isOnline = state.workspaceMode === "online";
-  let endpoint = "/chat";
   let payload;
   if (isOnline) {
     try {
@@ -793,7 +850,6 @@ async function sendQuestion(event) {
       return;
     }
     githubUrlInput.value = state.onlineGithubUrl;
-    endpoint = "/chat/online";
     payload = { github_url: state.onlineGithubUrl, question };
     updateActiveRepoText();
     setStatus("正在临时读取 GitHub 内容；本次请求不会建立本地知识库…");
@@ -803,7 +859,7 @@ async function sendQuestion(event) {
       appendMessage("assistant", "请先选择或导入一个知识库。");
       return;
     }
-    payload = { repository_id: repositoryId, question };
+    payload = { repository_id: repositoryId, question, history: state.history };
   }
 
   appendMessage("user", question);
@@ -817,12 +873,25 @@ async function sendQuestion(event) {
     { typing: true }
   );
 
+  const controller = new AbortController();
+  state.chatRequest = controller;
   try {
-    const data = await requestJson(endpoint, {
+    const options = {
       method: "POST",
       headers: getApiHeaders({ "Content-Type": "application/json" }, true),
       body: JSON.stringify(payload),
-    });
+      signal: controller.signal,
+    };
+    const data = isOnline
+      ? await requestJson("/chat/online", options)
+      : await requestChatStream(options, (partial) => {
+        if (state.chatRequest !== controller) return;
+        const follow = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 72;
+        thinking.querySelector(".bubble").replaceChildren(renderMessageContent(partial));
+        if (follow) messages.scrollTop = messages.scrollHeight;
+      });
+    if (state.chatRequest !== controller) return;
+    if (!isOnline) rememberChatTurn(question, data.answer);
     thinking.remove();
     appendMessage("assistant", data.answer, data.sources, { logs: data.logs || [] });
     if (isOnline) {
@@ -831,14 +900,18 @@ async function sendQuestion(event) {
       );
     }
   } catch (error) {
+    if (state.chatRequest !== controller) return;
     thinking.remove();
     appendMessage("assistant", `出错了：${error.message}`);
     if (isOnline) {
       setStatus(error.message, true);
     }
   } finally {
-    sendButton.disabled = false;
-    questionInput.focus();
+    if (state.chatRequest === controller) {
+      state.chatRequest = null;
+      sendButton.disabled = false;
+      questionInput.focus();
+    }
   }
 }
 

@@ -67,9 +67,17 @@ class RepositoryDeleteResponse(BaseModel):
     collections_deleted: int
 
 
+class ChatHistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class ChatRequest(BaseModel):
     repository_id: str = Field(..., min_length=1, max_length=140, pattern=REPOSITORY_ID_REGEX)
     question: str = Field(..., min_length=1, max_length=4000)
+    history: list[ChatHistoryMessage] = Field(default_factory=list, max_length=12)
 
 
 class OnlineChatRequest(BaseModel):

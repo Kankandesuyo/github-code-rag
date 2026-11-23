@@ -534,8 +534,8 @@ http://127.0.0.1:8200/
 - 截图文件：
 
 ```text
-E:\github-code-rag\ui-chat-desktop.png
-E:\github-code-rag\ui-chat-mobile.png
+docs/images/ui-chat-desktop.png
+docs/images/ui-chat-mobile.png
 ```
 
 主要文件：
@@ -1316,7 +1316,7 @@ http://127.0.0.1:8200/
 - 截图：
 
 ```text
-E:\github-code-rag\ui-v2-agent.png
+docs/images/ui-v2-agent.png
 ```
 
 当前状态：
@@ -1558,7 +1558,7 @@ Chat API 配置
 截图：
 
 ```text
-E:\github-code-rag\ui-v2-artifact.png
+docs/images/ui-v2-artifact.png
 ```
 
 当前状态：
